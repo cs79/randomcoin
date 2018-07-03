@@ -35,13 +35,16 @@ contract RandomLotto {
         ticketBalances[_add] = ticketBalances[_add] + (msg.value / ticketPrice);
     }
 
-    function runDraw() private
+    function runDraw()
+    private
+    returns(address)
     {
         // run the whole lotto
         // draw a winner
-        winner = drawJackpot();
+        address winner = drawJackpot();
         // determine winner payout / losers payout / holdout amount for defending RandomCoin pegs
         // pay the relevant parties
+        return(winner);
     }
 
     function drawJackpot() private returns(address)
@@ -54,17 +57,25 @@ contract RandomLotto {
     // ideally would return a mapping, but may need to just set one
     // now that i think about this, probably requires both array and mapping since mapping keys can't be iterated over
     function calcPayouts()
+    private
     {
 
     }
 
     function sendPayouts()
+    public
+    payable
     {
         // calls calcPayouts and then sends the appropriate balances to the addresses in the mapping
+        // honestly this probably isn't going to work -- just have a state enum that has a "Payout" state
+        // and during Payout period people can withdraw their winnings
+        // this has the extra benefit of potentially capturing more ether if it is coded in such a way as to take any ether for the peg defense pot which is not claimed within a certain window of time
+        
     }
 
     // have some type of closeout by owner that returns balances
     function equitableLiquidation()
+    public
     {
         if (msg.sender == owner) {
             // equitable return

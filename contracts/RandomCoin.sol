@@ -1,5 +1,12 @@
 pragma solidity ^0.4.0;
 
+import "./IterableBalances.sol";
+
+// TODO: use SafeMath wherever making calculations here (and in other contracts)
+// TODO: implement Ownable style interface for this, RandomLotto, anything else I write that needs it
+// possibly implement equitableDestruct as a base contract to inherit here and in RandomLotto
+// implement a base contract structure with array of structs w/ mappings of balances as an iterable structure for checking balances, payout out to holders, etc. to be used here + RandomLotto
+
 contract RandomCoin {
     // declare state / storage variables
     // the lotto contract should have an owner, but maybe this doesn't need one ?
@@ -15,11 +22,16 @@ contract RandomCoin {
     // not sure if this one is needed: holders array lists all accounts who have pegged in and not closed out
     address[] holders;
 
+    mapping (address => uint) equitablePayouts;  // use this to assign equitable balances to holders
+
+    // struct for iterable holders - import from base contract; use instead of rdcBalances / holders
+    
     // idea - 1 array of holders, 2 mappings (one for RDC balance, one for ETH sent to acquire it), OR mapping of address => struct (whichever is cheaper)
     // this would allow iteration over addresses (holders array) and then reference / manipulation of values related to those addresses
  
     // declare events
     // do any of these need to be indexed ? any other thing we want to log ?
+    // does it make sense to log "XXX failed" type events?  or are these self-evident in the logs?
     event PeggedIn(address _add, uint256 _amt);
     event PeggedOut(address _add, uint256 _amt);
     event TriggeredEquitableLiquidation(address _add);
@@ -42,7 +54,10 @@ contract RandomCoin {
         averageRate = 100;  // since there are no floats yet, index to 100 instead of 1
     }
 
-    function randomRate() private pure returns(uint)
+    function randomRate()
+    private
+    pure 
+    returns(uint)
     {
         // the most important piece -- will be called to generate the rate when pegIn() or pegOut() is called
         // needs to have an EV of 100
@@ -51,8 +66,11 @@ contract RandomCoin {
         // can use insecure method hashing block data as a placeholder; replace "in production" w/ something like RANDAO
     }
 
-    function pegIn(address _add, uint _amt) public payable
+    function pegIn(uint _amt)
+    public
+    payable
     {
+        address _add = msg.sender;
         // update the holders mapping at rate determined by randomRate(), in conjunction w/ balance sent by sender
         bool isHolderInMapping = false;
         if (rdcBalances[_add] != 0) {
@@ -67,8 +85,11 @@ contract RandomCoin {
         emit PeggedIn(_add, _amt);
     }
 
-    function pegOut(address _add, uint _amt) public payable
+    function pegOut(uint _amt)
+    public
+    payable
     {
+        address _add = msg.sender;
         // need to validate that _amt does not exceed rdcBalances[_addr]
         if (rdcBalances[_add] < _amt) {
             revert();
@@ -89,10 +110,11 @@ contract RandomCoin {
 
     // can't return mapping ? need to declare this as a state variable and use this function to set the values?
     // as in other cases, may need pattern of array + mapping here for later iteration
-    function calcPayouts() private returns(mapping(address => uint256))
+    function calcPayouts()
+    private
     {
         // should be called by both equitableDestruct and equitableLiquidation
-
+        // modify the mapping equitablePayouts based on calculation
     }
 
     // can't be private -- if public, assert that msg.sender is this contract's address ?
@@ -100,6 +122,9 @@ contract RandomCoin {
     {
         // split up the ether in this contract's balance proportionally to RDC ownership among all addresses in holders
         // basically a version of equitableLiquidation() that can be called during pegOut if the pot would be drained, rather than on command
+
+        // this may be infeasible if entire function call must be executed within one block -- could attempt this, but revert if failed to "fallback state"
+        // or could simply flag the whole contract as being in a particular state once this is called, and while in that state, allow withdrawal only for "equitable calcs"
 
         // emit relevant event
         emit TriggeredEquitableDestruct();

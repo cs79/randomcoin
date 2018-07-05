@@ -1,6 +1,6 @@
 pragma solidity ^0.4.0;
 
-import "./IterableBalances.sol";
+import "./IBFactory.sol";
 
 // TODO: use SafeMath wherever making calculations here (and in other contracts)
 // TODO: implement Ownable style interface for this, RandomLotto, anything else I write that needs it
@@ -9,7 +9,6 @@ import "./IterableBalances.sol";
 
 contract RandomCoin {
     // declare state / storage variables
-    // the lotto contract should have an owner, but maybe this doesn't need one ?
     // maybe another contract type is needed for RDC accounts, individually owned ? or can a mapping handle this fine here?
     address owner;  // for recovery, but make sure it can't do anything weird to pegged in balances
     // averageRate should have an expected value of 100  (1, ideally, but no floats)
@@ -18,17 +17,28 @@ contract RandomCoin {
     // need to keep track of everyone who has pegged in
     // does "randomcoin" need to be an actual "token"? should it be? I guess that is more interesting tbh... learn about how to do this
     // (alternative is simply using a mapping as the sole arbiter of balances; all "trading" done with the contract only via peg-in / peg-out)
-    mapping (address => uint) rdcBalances;
+    //mapping (address => uint) rdcBalances;
+    // replace with:
+    IBFactory ibf;
+    IterableBalances rdcBalances;  // I want this to be a new instance every time the state recycles
     // not sure if this one is needed: holders array lists all accounts who have pegged in and not closed out
-    address[] holders;
+    //address[] holders;
 
-    mapping (address => uint) equitablePayouts;  // use this to assign equitable balances to holders
+    uint availablePayout;  // set to the CURRENT BALANCE of ether at this contract when an equitable liquidation occurs
+
+    // with updates to IterableBalances.sol, this should no longer be needed
+    // just use (IB.balances[add] / IB.totalBalance) * availablePayout
+    //mapping (address => uint) equitablePayouts;  // use this to assign equitable balances to holders
 
     // struct for iterable holders - import from base contract; use instead of rdcBalances / holders
     
     // idea - 1 array of holders, 2 mappings (one for RDC balance, one for ETH sent to acquire it), OR mapping of address => struct (whichever is cheaper)
     // this would allow iteration over addresses (holders array) and then reference / manipulation of values related to those addresses
  
+
+    // state management
+    enum State { Funding, Active, Liquidating }
+
     // declare events
     // do any of these need to be indexed ? any other thing we want to log ?
     // does it make sense to log "XXX failed" type events?  or are these self-evident in the logs?
@@ -52,6 +62,8 @@ contract RandomCoin {
     {
         owner = msg.sender;
         averageRate = 100;  // since there are no floats yet, index to 100 instead of 1
+        ibf = IBFactory(this);
+        rdcBalances = ibf.createIB();
     }
 
     function randomRate()
@@ -70,40 +82,32 @@ contract RandomCoin {
     public
     payable
     {
+        
+        // logic for checking whether holder is in index is now in IterableBalances.sol
+        // just add the balance
         address _add = msg.sender;
-        // update the holders mapping at rate determined by randomRate(), in conjunction w/ balance sent by sender
-        bool isHolderInMapping = false;
-        if (rdcBalances[_add] != 0) {
-            isHolderInMapping = true;
-        }
-        rdcBalances[_add] = randomRate() * _amt;
-        // append the address to holders if it doesn't already exist in the array (check if lookup in rdcBalances is default value before adding to mapping)
-        if (!isHolderInMapping) {  // not sure on ! syntax here...
-            holders.push(_add);
-        }
+        uint _rndamt = msg.value * randomRate();
+        rdcBalances.addBalance(_add, _rndamt);  // add the RANDOMCOIN balance, not eth sent amount
         // emit the PeggedIn event
-        emit PeggedIn(_add, _amt);
+        emit PeggedIn(_add, _rndamt);
     }
 
     function pegOut(uint _amt)
     public
     payable
     {
+        // logic for checking randomcoin balance has been moved to IterableBalances.sol
         address _add = msg.sender;
-        // need to validate that _amt does not exceed rdcBalances[_addr]
-        if (rdcBalances[_add] < _amt) {
-            revert();
-        }
-        // if it does not, send the random rate in reverse (may need to use floor division for now)
-        uint toSend = _amt / randomRate();
-        // need to think about what happens if this toSend amount would drain the balance of the contract
+        uint _rndamt = _amt / randomRate();
+
+        // still need to think about what happens if amount to send would drain the balance of the contract
         // MAYBE -- equitableDestruct() to return something to everyone
-        if (toSend > this.balance) {
+        if (_rndamt > address(this).balance) {
             equitableDestruct();
         }
         // otherwise, send the toSend amount to _add
-        rdcBalances[_add] = rdcBalances[_add] - _amt;
-        _add.transfer(toSend);
+        rdcBalances.deductBalance(_add, _amt);  // deduct the RANDOMCOIN balance, not eth payout amt
+        _add.transfer(_rndamt);
         // emit the PeggedOut event
         emit PeggedOut(_add, _amt);
     }
@@ -115,6 +119,9 @@ contract RandomCoin {
     {
         // should be called by both equitableDestruct and equitableLiquidation
         // modify the mapping equitablePayouts based on calculation
+
+        // this is actually no longer needed - need a "withdrawFairShare" type fn for when equitable destruct type fn
+        // has changed state to Liquidating
     }
 
     // can't be private -- if public, assert that msg.sender is this contract's address ?

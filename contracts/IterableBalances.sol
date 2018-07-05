@@ -5,10 +5,12 @@ pragma solidity ^0.4.0;
 // and we use the factory pattern to instantiate these when we need to create an iterable balance thing
 // I think this may make more sense
 contract IterableBalances {
-    uint maxIndex;
-    address[] holders;
-    mapping (address => uint) index;  // simply used to avoid costly search through holders when checking for existence of a holder's address
-    mapping (address => uint) balances;
+    uint public maxIndex;
+    // make sure this one is properly updated in all cases where balances change
+    uint public totalBalance;  // for calculate equitable payouts in contracts that require them
+    address[] public holders;
+    mapping (address => uint) private index;  // simply used to avoid costly search through holders when checking for existence of a holder's address
+    mapping (address => uint) public balances;
 
     // events go here
     event AddedUser(address _add, uint _idx);
@@ -18,6 +20,7 @@ contract IterableBalances {
 
     constructor() public {
         maxIndex = 0;
+        totalBalance = 0;
     }
 
     function isUserInIndex(address _add)
@@ -63,6 +66,7 @@ contract IterableBalances {
             addUserToIndex(_add);
         }
         balances[_add] += _amt;
+        totalBalance += _amt;
         emit AddedBalance(_add, _amt);
         return(balances[_add]);
     }
@@ -77,7 +81,12 @@ contract IterableBalances {
         }
         assert(balances[_add] >= _amt);
         balances[_add] -= _amt;
+        totalBalance -= _amt;
         emit DeductedBalance(_add, _amt);
         return(balances[_add]);
     }
+
+    // I think this structure can be used to calculate "equitable payouts"
+    // can iterate, but OK if iteration calculation is large if just summing, maybe?
+    // alternative: sum AS BALANCES CHANGE -- equitable share then == (lookup balance / total balances) * available ether as of liquidation event
 }

@@ -27,6 +27,7 @@ contract RandomCoin {
     // state management
     enum State { Funding, Active, Liquidating }
     State state;
+    bool txLockMutex; // possibly redundant with transfer() calls
 
     // declare events
     // do any of these need to be indexed ? any other thing we want to log ?
@@ -79,6 +80,7 @@ contract RandomCoin {
         ibf = IBFactory(this);
         rdcBalances = ibf.createIB();
         state = State.Funding;
+        txLockMutex = false;
     }
 
     function randomRate()
@@ -113,6 +115,8 @@ contract RandomCoin {
     payable
     stateIsActive()
     {
+        // check the mutex to prevent reentrancy on payable transaction
+        require(!txLockMutex);
         // logic for checking randomcoin balance has been moved to IterableBalances.sol
         address _add = msg.sender;
         uint _rndamt = _amt / randomRate();
@@ -122,9 +126,12 @@ contract RandomCoin {
         if (_rndamt > address(this).balance) {
             equitableDestruct();
         }
-        // otherwise, send the toSend amount to _add
+        // otherwise, send the toSend amount to _add (after switching the mutex)
+        txLockMutex = true;
         rdcBalances.deductBalance(_add, _amt);  // deduct the RANDOMCOIN balance, not eth payout amt
         _add.transfer(_rndamt);
+        // release the mutex after external call
+        txLockMutex = false;
         // emit the PeggedOut event
         emit PeggedOut(_add, _amt);
     }
@@ -134,9 +141,15 @@ contract RandomCoin {
     payable
     canWithdrawEquitably()
     {
+        // check the mutex for payable function
+        require(!txLockMutex);
         address _add = msg.sender;
         uint _payout = (rdcBalances.balances(_add) / rdcBalances.totalBalance()) * availablePayout;
+        // set the lock mutex before transfer
+        txLockMutex = true;
         _add.transfer(_payout);
+        // release the lock mutex after transfer
+        txLockMutex = false;
         // may need to handle the case where the last person to withdraw cannot do so because fees have drained what would have been proportional shares initially
     }
 

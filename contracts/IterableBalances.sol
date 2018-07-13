@@ -9,7 +9,8 @@ contract IterableBalances {
     // make sure this one is properly updated in all cases where balances change
     uint public totalBalance;  // for calculate equitable payouts in contracts that require them
     address[] public holders;
-    mapping (address => uint) private index;  // simply used to avoid costly search through holders when checking for existence of a holder's address
+    // simply used to avoid costly search through holders when checking for existence of a holder's address
+    mapping (address => uint) private index;
     mapping (address => uint) public balances;
 
     // events go here

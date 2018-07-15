@@ -33,6 +33,8 @@ contract RandomCoin is Ownable {
     - txLockMutex may be better replaced by something in an OpenZeppelin library
 
     */
+
+    using SafeMath for uint256;
     
     // TODO: calculate this MINUS SOME % TO COVER FEES when liquidation is called
     uint256 availablePayout;
@@ -94,7 +96,7 @@ contract RandomCoin is Ownable {
 
     modifier blockWaitTimeHasElapsed() {
         require(state == State.Liquidating);
-        require((block.number - liquidationBlockNumber) >= blockWaitTime);
+        require(block.number.sub(liquidationBlockNumber) >= blockWaitTime);
         _;
     }
 
@@ -139,16 +141,17 @@ contract RandomCoin is Ownable {
 
     function rescaleRate(uint _min, uint _max, uint _ev, uint _buf, uint _x)
     private
-    pure
+    view
     returns(uint)
     {
         // rescale _min, _max to _ev-_width, _ev+_width and then return the f(_x) value using:
         // https://stackoverflow.com/questions/5294955/how-to-scale-down-a-range-of-numbers-with-a-known-min-and-max-value
-        uint _a = _ev - _buf;
-        uint _b = _ev + _buf;
+        uint _a = _ev.sub(_buf);
+        uint _b = _ev.add(_buf);
         require(_a > 0);
-        require(_a < _b);
-        return ((((_b - _a) * (_x - _min)) / (_max - _min)) + _a);
+        require(_a < _b);  // redundant now with SafeMath I think ?
+        //return ((((_b - _a) * (_x - _min)) / (_max - _min)) + _a);
+        return ((((_b.sub(_a)).mul((_x.sub(_min)))).div((_max.sub(_min)))).add(_a));
     }
 
     function pegIn()
@@ -159,7 +162,7 @@ contract RandomCoin is Ownable {
         // logic for checking whether holder is in index is now in IterableBalances.sol
         // just add the balance
         address _add = msg.sender;
-        uint _rndamt = msg.value * randomRate();
+        uint _rndamt = msg.value * randomRate();  // can I use SafeMath here ? need to recast randomRate return variable as uint256?
         rdcBalances.addBalance(_add, _rndamt);  // add the RANDOMCOIN balance, not eth sent amount
         // emit the PeggedIn event
         emit PeggedIn(_add, _rndamt);
@@ -202,7 +205,7 @@ contract RandomCoin is Ownable {
         // check the mutex for payable function
         require(!txLockMutex);
         address _add = msg.sender;
-        uint _payout = (rdcBalances.balances(_add) / rdcBalances.totalBalance()) * availablePayout;
+        uint _payout = (rdcBalances.balances(_add).div(rdcBalances.totalBalance())).mul(availablePayout);
         // set the lock mutex before transfer
         txLockMutex = true;
         _add.transfer(_payout);
@@ -247,6 +250,9 @@ contract RandomCoin is Ownable {
 
         // set availablePayout (minus some percentage to cover fees ?)
         // fees should be paid by caller of this function actually, not this contract, so below should be OK
+        // however, we could haircut this by some flat fee (smallish) and require that any pegIn values be at least, say, 10x this small amount
+        // in this case, set availablePayout to the result of a call to a new function that checks rdcBalance.numHolders
+        // and multiplies that by the fee, deducting the result from address(this).balance to get the return value
         availablePayout = address(this).balance;
 
         state = State.Liquidating;

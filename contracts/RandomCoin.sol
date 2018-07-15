@@ -4,26 +4,55 @@ import "./IBFactory.sol";
 import "installed_contracts/zeppelin/contracts/ownership/Ownable.sol";
 
 // TODO: use SafeMath wherever making calculations here (and in other contracts)
-// TODO: implement Ownable style interface for this, RandomLotto, anything else I write that needs it
 // possibly implement equitableDestruct as a base contract to inherit here and in RandomLotto
-// implement a base contract structure with array of structs w/ mappings of balances as an iterable structure for checking balances, payout out to holders, etc. to be used here + RandomLotto
 
 contract RandomCoin is Ownable {
-    // declare state / storage variables
-    //address owner;  -- redundant w/ Ownable.sol // for recovery, but make sure it can't do anything weird to pegged in balances
+    /*
 
-    // averageRate should have an expected value of 100  (1, ideally, but no floats)
-    // an "ideal" version of this would allow for timeseries graphing of average rate in the web service -- not sure how this might be achieved though
-    uint averageRate;  // update this as events are emitted ? or rely on web service to aggregate records later?
+    State / storage variables:
+    --------------------------
+    availablePayout         : should be set to CURRENT BALANCE of eth at this contract (minus some % to cover fees?) when liquidation occurs
+    averageRate             : should have EV of 1 (or 100; index level)
+    expectedRate            : hardcode this as a point of comparison for averageRate
+    liquidationBlockNumber  : block height at liquidation event
+    blockWaitTime           : blocks to wait after liquidation before state reset is allowed
+    ibf                     : factory to create new IterableBalance tracking contracts ("objects")
+    rdcBalances             : IterableBalances instance to track ownership of RNDC (all pegged-in accts)
+    State                   : enum of states this contract can be in
+    state                   : contract's current State value
+    txLockMutex             : transaction locking mutex to prevent reentrancy
+
+    Notes:
+    ------
+    - averageRate needs to be managed without floats for now
+    - averageRate should ideally create (somewhere) a record of its past values, for frontend TS graphs
+    - rdcBalances needs to be "reinstantiated" every time this contract resets (i.e. if liquidated)
+    - use (IB.balances[add] / IB.totalBalance) * availablePayout to assign equitable balances to holders
+    - txLockMutex may be better replaced by something in an OpenZeppelin library
+
+    */
     
-    // need to keep track of everyone who has pegged in
+    // TODO: calculate this MINUS SOME % TO COVER FEES when liquidation is called
+    uint256 availablePayout;
+    // TODO: update this as events are emitted
+    uint256 averageRate;
+    uint256 expectedRate;
+    uint256 liquidationBlockNumber;
+    uint256 blockWaitTime;
+    
+    IBFactory ibf;
+    IterableBalances rdcBalances;
+
+    // TODO: import ERC20 token contract from OpenZeppelin, instantiate RandomCoin token, use IB to track it (maybe ?)
     // does "randomcoin" need to be an actual "token"? should it be? I guess that is more interesting tbh... learn about how to do this
     // (alternative is simply using a mapping as the sole arbiter of balances; all "trading" done with the contract only via peg-in / peg-out)
-    IBFactory ibf;
-    IterableBalances rdcBalances;  // I want this to be a new instance every time the state recycles
+    // if RNDC is a TOKEN, IterableBalances is kind of pointless because then you need to keep states in sync
+    // harder to recycle state of this contract and start a "new round"
+    // I guess you could let people hold on to their RNDC from previous rounds, and if they missed a cash-out state they could peg out on next round
+    // but then how to calculate "equitable payouts" ? equitable to "last round", or equitable to OVERALL RNDC outstanding ?
+    // from mechanism design perspective, an ERC20 token may be better
+    // (disincentivizes rapid peg-in / peg-out to try to force a liquidation after some disproportionate peg-outs)
 
-    // use (IB.balances[add] / IB.totalBalance) * availablePayout to assign equitable balances to holders
-    uint availablePayout;  // set to the CURRENT BALANCE of ether at this contract when an equitable liquidation occurs
 
     // state management
     enum State { Funding, Active, Liquidating }
@@ -40,36 +69,29 @@ contract RandomCoin is Ownable {
     event StateChangeToFunding();
     event StateChangeToActive();
     event StateChangeToLiquidating();
+    event FullContractReset(address _add);  // maybe; kind of redundant w/ StateChangeToFunding
+
+    // TODO: add more events (or just return values to functions) to make test writing easier
 
     // declare modifiers
-    // modifier to check that call is internal (for payables that must be public, but should only be triggered by this contract's functions)
-    modifier isInternalCall(address _add) {
-        require(
-            msg.sender == address(this),
-            "Function must be called by this contract"
-        );
-        _;
-    }
-
-    // need state-checking modifiers as well
     modifier notLiquidating() {
-        require(
-            state != State.Liquidating
-        );
+        require(state != State.Liquidating);
         _;
     }
 
     modifier stateIsActive() {
-        require(
-            state == State.Active
-        );
+        require(state == State.Active);
         _;
     }
 
-    modifier canWithdrawEquitably() {
-        require(
-            state == State.Liquidating
-        );
+    modifier stateIsLiquidating() {
+        require(state == State.Liquidating);
+        _;
+    }
+
+    modifier blockWaitTimeHasElapsed() {
+        require(state == State.Liquidating);
+        require((block.number - liquidationBlockNumber) >= blockWaitTime);
         _;
     }
 
@@ -78,7 +100,10 @@ contract RandomCoin is Ownable {
     public
     {
         owner = msg.sender;
-        averageRate = 100;  // since there are no floats yet, index to 100 instead of 1
+        availablePayout = 0;  // maybe ?
+        averageRate = 100;  // since there are no floats yet, index to 100 (or higher ?) instead of 1
+        expectedRate = 100;  // think about this... maybe higher for better decimal approximation ?
+        blockWaitTime = 5760 * 14;  // 2 weeks seems reasonable I guess 
         ibf = IBFactory(this);
         rdcBalances = ibf.createIB();
         state = State.Funding;
@@ -87,11 +112,11 @@ contract RandomCoin is Ownable {
 
     function randomRate()
     private
-    pure 
+    pure
     returns(uint)
     {
         // the most important piece -- will be called to generate the rate when pegIn() or pegOut() is called
-        // needs to have an EV of 100
+        // needs to have an EV of 100 (or whatever we set the expected rate to be)
         // no idea what math / random libraries are already available in solidity... hopefully something I can work with for this 
         // just assume that RANDAO is up and running for the time being; tackle random generation last ?
         // can use insecure method hashing block data as a placeholder; replace "in production" w/ something like RANDAO
@@ -102,7 +127,6 @@ contract RandomCoin is Ownable {
     payable
     notLiquidating()
     {
-        
         // logic for checking whether holder is in index is now in IterableBalances.sol
         // just add the balance
         address _add = msg.sender;
@@ -119,12 +143,15 @@ contract RandomCoin is Ownable {
     {
         // check the mutex to prevent reentrancy on payable transaction
         require(!txLockMutex);
-        // logic for checking randomcoin balance has been moved to IterableBalances.sol
         address _add = msg.sender;
-        uint _rndamt = _amt / randomRate();
+        // logic for checking randomcoin balance has been moved to IterableBalances.sol
+        // BUT still need to check here I think - otherwise sender could easily force equitableDestruct()
+        require(rdcBalances.balances(_add) >= _amt, "Insufficient balance to peg out");
 
-        // still need to think about what happens if amount to send would drain the balance of the contract
-        // MAYBE -- equitableDestruct() to return something to everyone
+        // calculate amount of eth to send (DOES THIS WORK WITHOUT FLOATS ??? MIGHT NEED TO RECONFIGURE MATH FORMULA HERE)
+        uint _rndamt = _amt / randomRate(); // maybe rename - _rndamt here is a "random amount of eth"
+
+        // if contract would be drained by peg out, allow equitable withdrawal of whatever is left
         if (_rndamt > address(this).balance) {
             equitableDestruct();
         }
@@ -141,7 +168,7 @@ contract RandomCoin is Ownable {
     function equitableWithdrawal()  // maybe rename this...
     public
     payable
-    canWithdrawEquitably()
+    stateIsLiquidating()
     {
         // check the mutex for payable function
         require(!txLockMutex);
@@ -155,11 +182,8 @@ contract RandomCoin is Ownable {
         // may need to handle the case where the last person to withdraw cannot do so because fees have drained what would have been proportional shares initially
     }
 
-    // can't be private -- if public, assert that msg.sender is this contract's address ?
     function equitableDestruct()
-    public
-    //payable
-    isInternalCall(msg.sender)
+    private
     notLiquidating()
     {
         // set state to Liquidating
@@ -173,7 +197,6 @@ contract RandomCoin is Ownable {
 
     function equitableLiquidation()
     public
-    //payable
     notLiquidating()
     onlyOwner()
     {
@@ -187,6 +210,7 @@ contract RandomCoin is Ownable {
     // instead of just manually changing the state in equitableDestruct / equitableLiquidation, use a smarter method here:
     function startLiquidation()
     private
+    notLiquidating()  // possibly redundant but maybe keep to be safe
     {
         // any modifiers needed here ?
         state = State.Liquidating;
@@ -194,6 +218,24 @@ contract RandomCoin is Ownable {
 
         // how can we start a timer and then "ensure" that the contract gets reset to funding state afterwards?
         // this may not be directly possible, so can we make a modifier for ALL other functions that resets the state if eligible to do so ?
+        liquidationBlockNumber = block.number;
+    }
 
+    // IDEA: owner can reset state, but ONLY after some window of time has passed allowing people enough time to withdraw (e.g. 2 weeks or something)
+    function resetState()
+    public
+    onlyOwner()
+    stateIsLiquidating()
+    blockWaitTimeHasElapsed()
+    {
+        // ALL relevant variables need to be handled here - check constructor / all state vars
+        averageRate = expectedRate;  // maybe ? or shoud we track this over longer horizons?
+        rdcBalances = ibf.createIB();  // unless we switch to RNDC token, perhaps
+        state = State.Funding;
+        txLockMutex = false;  // hopefully redundant
+
+        // emit relevant event(s)
+        emit FullContractReset(msg.sender);
+        emit StateChangeToFunding();
     }
 }

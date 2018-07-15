@@ -2,6 +2,7 @@ pragma solidity ^0.4.0;
 
 import "./IBFactory.sol";
 import "installed_contracts/zeppelin/contracts/ownership/Ownable.sol";
+import "installed_contracts/zeppelin/contracts/math/SafeMath.sol";
 
 // TODO: use SafeMath wherever making calculations here (and in other contracts)
 // possibly implement equitableDestruct as a base contract to inherit here and in RandomLotto
@@ -14,6 +15,7 @@ contract RandomCoin is Ownable {
     availablePayout         : should be set to CURRENT BALANCE of eth at this contract (minus some % to cover fees?) when liquidation occurs
     averageRate             : should have EV of 1 (or 100; index level)
     expectedRate            : hardcode this as a point of comparison for averageRate
+    halfWidth               : half interval around expectedRate to get random rates from
     liquidationBlockNumber  : block height at liquidation event
     blockWaitTime           : blocks to wait after liquidation before state reset is allowed
     ibf                     : factory to create new IterableBalance tracking contracts ("objects")
@@ -37,6 +39,7 @@ contract RandomCoin is Ownable {
     // TODO: update this as events are emitted
     uint256 averageRate;
     uint256 expectedRate;
+    uint halfWidth;
     uint256 liquidationBlockNumber;
     uint256 blockWaitTime;
     
@@ -103,6 +106,7 @@ contract RandomCoin is Ownable {
         availablePayout = 0;  // maybe ?
         averageRate = 100;  // since there are no floats yet, index to 100 (or higher ?) instead of 1
         expectedRate = 100;  // think about this... maybe higher for better decimal approximation ?
+        halfWidth = 50;
         blockWaitTime = 5760 * 14;  // 2 weeks seems reasonable I guess 
         ibf = IBFactory(this);
         rdcBalances = ibf.createIB();
@@ -112,7 +116,7 @@ contract RandomCoin is Ownable {
 
     function randomRate()
     private
-    pure
+    view
     returns(uint)
     {
         // the most important piece -- will be called to generate the rate when pegIn() or pegOut() is called
@@ -120,6 +124,31 @@ contract RandomCoin is Ownable {
         // no idea what math / random libraries are already available in solidity... hopefully something I can work with for this 
         // just assume that RANDAO is up and running for the time being; tackle random generation last ?
         // can use insecure method hashing block data as a placeholder; replace "in production" w/ something like RANDAO
+
+        // insecure placeholder:
+        uint8 _rand = uint8(uint256(keccak256(abi.encodePacked(block.timestamp, block.difficulty))) % 251);
+        // rescale to mean 100 (or whatever) -- 0 and 250 hardcoded here based on how _rand is calculated
+        uint _rescaled = rescaleRate(0, 250, expectedRate, halfWidth, _rand);
+
+        // cannot be zero:
+        if (_rescaled == 0) {
+            _rescaled = 1;
+        }
+        return _rescaled;
+    }
+
+    function rescaleRate(uint _min, uint _max, uint _ev, uint _buf, uint _x)
+    private
+    pure
+    returns(uint)
+    {
+        // rescale _min, _max to _ev-_width, _ev+_width and then return the f(_x) value using:
+        // https://stackoverflow.com/questions/5294955/how-to-scale-down-a-range-of-numbers-with-a-known-min-and-max-value
+        uint _a = _ev - _buf;
+        uint _b = _ev + _buf;
+        require(_a > 0);
+        require(_a < _b);
+        return ((((_b - _a) * (_x - _min)) / (_max - _min)) + _a);
     }
 
     function pegIn()
@@ -213,12 +242,19 @@ contract RandomCoin is Ownable {
     notLiquidating()  // possibly redundant but maybe keep to be safe
     {
         // any modifiers needed here ?
+        // set liquidation block height to start "countdown" before owner can reset state
+        liquidationBlockNumber = block.number;
+
+        // set availablePayout (minus some percentage to cover fees ?)
+        // fees should be paid by caller of this function actually, not this contract, so below should be OK
+        availablePayout = address(this).balance;
+
         state = State.Liquidating;
         emit StateChangeToLiquidating();
 
         // how can we start a timer and then "ensure" that the contract gets reset to funding state afterwards?
         // this may not be directly possible, so can we make a modifier for ALL other functions that resets the state if eligible to do so ?
-        liquidationBlockNumber = block.number;
+        
     }
 
     // IDEA: owner can reset state, but ONLY after some window of time has passed allowing people enough time to withdraw (e.g. 2 weeks or something)
@@ -229,6 +265,7 @@ contract RandomCoin is Ownable {
     blockWaitTimeHasElapsed()
     {
         // ALL relevant variables need to be handled here - check constructor / all state vars
+        // worth resetting availablePayout to 0 or something here, to keep resetting "cleaner" ? Logically unnecessary I think
         averageRate = expectedRate;  // maybe ? or shoud we track this over longer horizons?
         rdcBalances = ibf.createIB();  // unless we switch to RNDC token, perhaps
         state = State.Funding;

@@ -1,15 +1,16 @@
 pragma solidity ^0.4.0;
 
 import "./IBFactory.sol";
+import "installed_contracts/zeppelin/contracts/ownership/Ownable.sol";
 
 // TODO: use SafeMath wherever making calculations here (and in other contracts)
 // TODO: implement Ownable style interface for this, RandomLotto, anything else I write that needs it
 // possibly implement equitableDestruct as a base contract to inherit here and in RandomLotto
 // implement a base contract structure with array of structs w/ mappings of balances as an iterable structure for checking balances, payout out to holders, etc. to be used here + RandomLotto
 
-contract RandomCoin {
+contract RandomCoin is Ownable {
     // declare state / storage variables
-    address owner;  // for recovery, but make sure it can't do anything weird to pegged in balances
+    //address owner;  -- redundant w/ Ownable.sol // for recovery, but make sure it can't do anything weird to pegged in balances
 
     // averageRate should have an expected value of 100  (1, ideally, but no floats)
     // an "ideal" version of this would allow for timeseries graphing of average rate in the web service -- not sure how this might be achieved though
@@ -73,7 +74,8 @@ contract RandomCoin {
     }
 
     // declare constructor + other functions
-    constructor() public
+    constructor()
+    public
     {
         owner = msg.sender;
         averageRate = 100;  // since there are no floats yet, index to 100 instead of 1
@@ -156,7 +158,7 @@ contract RandomCoin {
     // can't be private -- if public, assert that msg.sender is this contract's address ?
     function equitableDestruct()
     public
-    payable
+    //payable
     isInternalCall(msg.sender)
     notLiquidating()
     {
@@ -171,19 +173,15 @@ contract RandomCoin {
 
     function equitableLiquidation()
     public
-    payable
+    //payable
     notLiquidating()
+    onlyOwner()
     {
-        if (msg.sender == owner) {
-            // set state to Liquidating
-            startLiquidation();
+        // set state to Liquidating
+        startLiquidation();
 
-            // emit relevant events
-            emit TriggeredEquitableLiquidation(msg.sender);
-        }
-        else {
-            revert();  // unnecessary ?
-        }
+        // emit relevant events
+        emit TriggeredEquitableLiquidation(msg.sender);
     }
 
     // instead of just manually changing the state in equitableDestruct / equitableLiquidation, use a smarter method here:

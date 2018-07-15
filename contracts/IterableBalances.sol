@@ -9,6 +9,7 @@ contract IterableBalances {
     // make sure this one is properly updated in all cases where balances change
     uint public totalBalance;  // for calculate equitable payouts in contracts that require them
     address[] public holders;
+    uint public numHolders; 
     // simply used to avoid costly search through holders when checking for existence of a holder's address
     mapping (address => uint) private index;
     mapping (address => uint) public balances;
@@ -43,6 +44,7 @@ contract IterableBalances {
         index[_add] = maxIndex;
         holders[maxIndex] = _add;
         maxIndex += 1;
+        numHolders += 1;
         emit AddedUser(_add, index[_add]);
         return(index[_add]);
     }
@@ -55,6 +57,7 @@ contract IterableBalances {
         assert(balances[_add] == 0);  // maybe
         delete holders[index[_add]];
         index[_add] = 0;
+        numHolders -= 1;
         emit RemovedUser(_add, _idx);
     }
 

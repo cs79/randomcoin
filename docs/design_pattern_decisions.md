@@ -5,6 +5,7 @@ Used so far:
 * pull over push payments (w/ one exception from contract to contract; limited scope)
 * mutex (if I keep it) -- avoid reentrancy
 * ownership (for forcing contract "fair payout" states)
+* factory (for IterableBalances contract of my own design) - want to be able to share these over more than one contract, and within a specific contract may want to "reset" them / grab a new clean-slate one [N.B. even if I use RDCToken MintableToken instead, still using a factory]
 
 MUST ALSO USE:
 * circuit breaker (I believe this is a requirement for the course)

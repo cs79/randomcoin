@@ -1,4 +1,4 @@
-pragma solidity ^0.4.0;
+pragma solidity ^0.4.13;
 
 // not sure if this meets the "EthPM" requirement for the class... hopefully good enough
 // if this seems to work OK in this contract, add it to RandomCoin.sol as well
@@ -13,6 +13,7 @@ contract RandomLotto is Ownable {
     //address owner;  -- redundant when using Ownable.sol
     uint ticketPrice;  // price in wei
     mapping (address => uint) ticketBalances;
+    mapping (address => uint) currentPayouts;  // maybe...
     address[] ticketHolders;  // not sure if necessary ?  use IterableBalances for this? or wrong structure?
     uint lastDraw;
     enum State {
@@ -26,6 +27,10 @@ contract RandomLotto is Ownable {
     uint totalTickets;  // to store total number of issued tickets; !!! needs to be reset when lottery resets !!!
     uint availablePayout;  // to store contract balance snapshot in case of equitable liquidation event
 
+    // should have a declared address pointing to the RandomCoin.sol deployed contract instance
+    // this needs to be settable by the owner; will be required for testing
+    address rdcContractAddress;
+
     // idea from Medium post here: https://medium.com/@promentol/lottery-smart-contract-can-we-generate-random-numbers-in-solidity-4f586a152b27
     // use a "state" state variable for accepting tickets / drawing the value
     // this would probably be good in general
@@ -36,6 +41,7 @@ contract RandomLotto is Ownable {
     event StateChangeToDrawingWinner();
     event StateChangeToPayingOut(); 
     event StateChangeToLiquidating();
+    event SetRdcContractAddress(address _add);
     event PaidToRandomCoin();  // need a function that does this, too - push at PayingOut stage?
 
     // modifiers: need state checking at a minimum here I think
@@ -46,9 +52,12 @@ contract RandomLotto is Ownable {
 
     // copied from RandomCoin.sol -- maybe abstract some of these into a library if it makes sense
     modifier canWithdrawEquitably() {
-        require(
-            state == State.Liquidating
-        );
+        require(state == State.Liquidating);
+        _;
+    }
+
+    modifier rdcContractAddressExists() {
+        require(rdcContractAddress != address(0));
         _;
     }
 
@@ -109,6 +118,7 @@ contract RandomLotto is Ownable {
     function calcPayouts()
     private
     {
+        // should set a mapping called currentPayouts or something
 
     }
 
@@ -121,6 +131,20 @@ contract RandomLotto is Ownable {
         // and during Payout period people can withdraw their winnings
         // this has the extra benefit of potentially capturing more ether if it is coded in such a way as to take any ether for the peg defense pot which is not claimed within a certain window of time
         
+    }
+
+    // use this instead of sendPayouts
+    function claimPayout()
+    public
+    payable
+    {
+        address _add = msg.sender;
+        uint _tktbal = ticketBalances[_add];
+
+        // do any other logic checks needed here / transformations to the amount to send
+        uint _toSend = _tktbal;  // CHANGE THIS
+
+        _add.transfer(_toSend);
     }
 
     // also copied more or less from RandomCoin.sol -- is there a way to abstract these?
@@ -155,5 +179,13 @@ contract RandomLotto is Ownable {
         state = State.Liquidating;
         // emit relevant event
         emit TriggeredEquitableLiquidation(msg.sender);
+    }
+
+    function setRdcContractAddress(address _add)
+    public
+    onlyOwner()
+    {
+        rdcContractAddress = _add;
+        emit SetRdcContractAddress(_add);
     }
 }

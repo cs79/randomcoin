@@ -76,6 +76,7 @@ contract RandomCoin is Ownable {
     
     // TODO: calculate this MINUS SOME % TO COVER FEES (or just haircut) when liquidation is called
     uint256 availablePayout;
+    uint256 private haircut;
     // TODO: update this as pegIn() / pegOut() calls are made
     uint256 averageRate;
     uint256 lastAvgRate;
@@ -86,6 +87,8 @@ contract RandomCoin is Ownable {
     uint halfWidth;
     uint256 liquidationBlockNumber;
     uint256 blockWaitTime;
+    uint256 minimumPegInBaseAmount; // liquidation haircut
+    uint256 minimumPegInMultiplier;
     
     IBFactory ibf;
     IterableBalances rdcBalances;
@@ -147,6 +150,11 @@ contract RandomCoin is Ownable {
         _;
     }
 
+    modifier canAffordPegIn() {
+        require(msg.value >= (minimumPegInBaseAmount * minimumPegInMultiplier), "Insufficient peg in value");
+        _;
+    }
+
     // TODO: check this and then call it where appropriate
     // consider making this a library to be imported here and RandomLotto
     // this actually may not work as a modifier as-is due to require calls at start of functions
@@ -165,7 +173,10 @@ contract RandomCoin is Ownable {
     public
     {
         owner = msg.sender;
-        availablePayout = 0;  // maybe ? or msg.value() when constructed I guess ?
+        minimumPegInBaseAmount = 100 szabo; // ~ 5 cents
+        minimumPegInMultiplier = 10;
+        availablePayout = 0;  // keep at 0 since msg.value when constructed may be higher than the actual contract balance after construction
+        haircut = 0;  // this is what should get incremented when accounts peg in
         averageRate = 100;  // since there are no floats yet, index to 100 (or higher ?) instead of 1
         expectedRate = 100;  // think about this... maybe higher for better decimal approximation ?
         halfWidth = 50;
@@ -220,6 +231,7 @@ contract RandomCoin is Ownable {
     public
     payable
     notLiquidating()
+    canAffordPegIn()
     returns(uint)
     {
         // logic for checking whether holder is in index is now in IterableBalances.sol
@@ -228,6 +240,8 @@ contract RandomCoin is Ownable {
         uint _rndamt = msg.value.mul(randomRate());  // can I use SafeMath here ? need to recast randomRate return variable as uint256?
         rdcBalances.addBalance(_add, _rndamt);  // add the RANDOMCOIN balance, not eth sent amount
         rdc.mint(_add, _rndamt);
+        // capture the haircut to deduct from availablePayout
+        haircut += minimumPegInBaseAmount;
         // emit the PeggedIn event
         emit PeggedIn(_add, _rndamt);
         // return the amount received for peg-in
@@ -345,7 +359,7 @@ contract RandomCoin is Ownable {
         // however, we could haircut this by some flat fee (smallish) and require that any pegIn values be at least, say, 10x this small amount
         // in this case, set availablePayout to the result of a call to a new function that checks rdcBalance.numHolders
         // and multiplies that by the fee, deducting the result from address(this).balance to get the return value
-        availablePayout = address(this).balance;
+        availablePayout = address(this).balance - haircut;
 
         state = State.Liquidating;
         emit StateChangeToLiquidating();
@@ -372,6 +386,7 @@ contract RandomCoin is Ownable {
         // if using rdc instead of rdcBalances, should just check that we have, in fact, created an instance (should always be true)
         state = State.Funding;
         txLockMutex = false;  // hopefully redundant
+        haircut = 0; // I think this should be reset here
 
         // emit relevant event(s)
         emit FullContractReset(msg.sender);

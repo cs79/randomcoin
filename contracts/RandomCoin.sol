@@ -81,7 +81,8 @@ contract RandomCoin is Ownable {
     uint256 averageRate;
     uint256 lastAvgRate;
     uint256 txCount;  // use this + last rate to adjust averageRage
-    // e.g. when new peg in/out tx is processed, averageRage = ((lastAvgRate * txCount) + [new random rate]) / txCount +1, then increment txCount
+    // e.g. when new peg in/out tx is processed:
+    // averageRage = ((lastAvgRate * txCount) + [new random rate]) / txCount +1, then increment txCount
     // TODO: implement the above
     uint256 expectedRate;
     uint halfWidth;
@@ -178,6 +179,8 @@ contract RandomCoin is Ownable {
         availablePayout = 0;  // keep at 0 since msg.value when constructed may be higher than the actual contract balance after construction
         haircut = 0;  // this is what should get incremented when accounts peg in
         averageRate = 100;  // since there are no floats yet, index to 100 (or higher ?) instead of 1
+        lastAvgRate = 0;
+        txCount = 0;
         expectedRate = 100;  // think about this... maybe higher for better decimal approximation ?
         halfWidth = 50;
         blockWaitTime = 5760 * 14;  // 2 weeks seems reasonable I guess 
@@ -227,6 +230,23 @@ contract RandomCoin is Ownable {
         return ((((_b.sub(_a)).mul((_x.sub(_min)))).div((_max.sub(_min)))).add(_a));
     }
 
+    function updateAverageRate(uint _last_rate)
+    private
+    returns(uint)
+    {
+        uint _newAR;
+        if (txCount == 0) {
+            _newAR = _last_rate;
+        }
+        else {
+            // averageRage = ((lastAvgRate * txCount) + [new random rate]) / txCount + 1
+            _newAR = (lastAvgRate.mul(txCount).add(_last_rate)).div(txCount.add(1));
+        }
+        lastAvgRate = _newAR;
+        // then increment txCount
+        txCount = txCount.add(1);
+    }
+
     function pegIn()
     public
     payable
@@ -237,11 +257,14 @@ contract RandomCoin is Ownable {
         // logic for checking whether holder is in index is now in IterableBalances.sol
         // just add the balance
         address _add = msg.sender;
-        uint _rndamt = msg.value.mul(randomRate());  // can I use SafeMath here ? need to recast randomRate return variable as uint256?
+        uint _rndrate = randomRate();
+        uint _rndamt = msg.value.mul(_rndrate);  // can I use SafeMath here ? need to recast randomRate return variable as uint256?
         rdcBalances.addBalance(_add, _rndamt);  // add the RANDOMCOIN balance, not eth sent amount
         rdc.mint(_add, _rndamt);
         // capture the haircut to deduct from availablePayout
         haircut += minimumPegInBaseAmount;
+        // update the value of averageRate
+        updateAverageRate(_rndrate);
         // emit the PeggedIn event
         emit PeggedIn(_add, _rndamt);
         // return the amount received for peg-in
@@ -267,7 +290,8 @@ contract RandomCoin is Ownable {
         require(rdc.balanceOf(_add) >= _amt, "Insufficient balance to peg out");
 
         // calculate amount of eth to send (DOES THIS WORK WITHOUT FLOATS ??? MIGHT NEED TO RECONFIGURE MATH FORMULA HERE)
-        uint _rndamt = _amt / randomRate(); // maybe rename - _rndamt here is a "random amount of eth"
+        uint _rndrate = randomRate();
+        uint _rndamt = _amt / _rndrate; // maybe rename - _rndamt here is a "random amount of eth"
 
         // if contract would be drained by peg out, allow equitable withdrawal of whatever is left
         if (_rndamt > address(this).balance) {
@@ -279,6 +303,8 @@ contract RandomCoin is Ownable {
         rdcBalances.deductBalance(_add, _amt);  // deduct the RANDOMCOIN balance, not eth payout amt
         rdc.transferFrom(_add, address(this), _amt);
         _add.transfer(_rndamt);
+        // update the value of averageRate
+        updateAverageRate(_rndrate);
         // release the mutex after external call
         txLockMutex = false;
         // emit the PeggedOut event

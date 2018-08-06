@@ -108,7 +108,7 @@ contract RandomCoin is Ownable {
     enum State { Funding, Active, Liquidating }
     State state;
     bool txLockMutex; // possibly redundant with transfer() calls
-    bool rdcCreated;
+    bool rdcCreated;  // if this never gets checked anywhere, possibly eliminate
 
     // declare events
     // do any of these need to be indexed ? any other thing we want to log ?
@@ -120,6 +120,7 @@ contract RandomCoin is Ownable {
     event StateChangeToFunding();
     event StateChangeToActive();
     event StateChangeToLiquidating();
+    event MadeEquitableWithdrawal(address _add, uint _amt);
     event FullContractReset(address _add);  // maybe; kind of redundant w/ StateChangeToFunding
 
     // TODO: add more events (or just return values to functions) to make test writing easier
@@ -164,7 +165,7 @@ contract RandomCoin is Ownable {
     public
     {
         owner = msg.sender;
-        availablePayout = 0;  // maybe ?
+        availablePayout = 0;  // maybe ? or msg.value() when constructed I guess ?
         averageRate = 100;  // since there are no floats yet, index to 100 (or higher ?) instead of 1
         expectedRate = 100;  // think about this... maybe higher for better decimal approximation ?
         halfWidth = 50;
@@ -219,6 +220,7 @@ contract RandomCoin is Ownable {
     public
     payable
     notLiquidating()
+    returns(uint)
     {
         // logic for checking whether holder is in index is now in IterableBalances.sol
         // just add the balance
@@ -228,12 +230,19 @@ contract RandomCoin is Ownable {
         rdc.mint(_add, _rndamt);
         // emit the PeggedIn event
         emit PeggedIn(_add, _rndamt);
+        // return the amount received for peg-in
+        return _rndamt;
     }
 
+    // currently:
+    // _amt is the amount of RDC to peg out
+    // _rndamt is the random amount of Ether received in exchange for _amt RDC
+    // maybe rename this to avoid confusing myself (_eth_amt, _rdc_amt) here and elsewhere
     function pegOut(uint _amt)
     public
     payable
     stateIsActive()
+    returns(uint)
     {
         // check the mutex to prevent reentrancy on payable transaction
         require(!txLockMutex, "txLockMutex must be unlocked");
@@ -249,6 +258,7 @@ contract RandomCoin is Ownable {
         // if contract would be drained by peg out, allow equitable withdrawal of whatever is left
         if (_rndamt > address(this).balance) {
             equitableDestruct();
+            // do I need to call anything else here to ensure no weirdness happens after calling equitableDestruct?
         }
         // otherwise, send the toSend amount to _add (after switching the mutex)
         txLockMutex = true;
@@ -259,12 +269,15 @@ contract RandomCoin is Ownable {
         txLockMutex = false;
         // emit the PeggedOut event
         emit PeggedOut(_add, _amt);
+        // return the amount pegged out
+        return _amt;
     }
 
     function equitableWithdrawal()  // maybe rename this...
     public
     payable
     stateIsLiquidating()
+    returns(uint)
     {
         // check the mutex for payable function
         require(!txLockMutex, "txLockMutex must be unlocked");
@@ -279,11 +292,17 @@ contract RandomCoin is Ownable {
         // release the lock mutex after transfer
         txLockMutex = false;
         // may need to handle the case where the last person to withdraw cannot do so because fees have drained what would have been proportional shares initially
+        
+        // emit the relevant event
+        emit MadeEquitableWithdrawal(_add, _payout);
+        // return the amount paid out
+        return _payout;
     }
 
     function equitableDestruct()
     private
     notLiquidating()
+    returns(bool)
     {
         // set state to Liquidating
         startLiquidation();
@@ -292,24 +311,30 @@ contract RandomCoin is Ownable {
 
         // emit relevant events
         emit TriggeredEquitableDestruct();
+        // return true for testing
+        return true;
     }
 
     function equitableLiquidation()
     public
     notLiquidating()
     onlyOwner()
+    returns(bool)
     {
         // set state to Liquidating
         startLiquidation();
 
         // emit relevant events
         emit TriggeredEquitableLiquidation(msg.sender);
+        // return true for testing
+        return true;
     }
 
     // instead of just manually changing the state in equitableDestruct / equitableLiquidation, use a smarter method here:
     function startLiquidation()
     private
     notLiquidating()  // possibly redundant but maybe keep to be safe
+    returns(bool)
     {
         // any modifiers needed here ?
         // set liquidation block height to start "countdown" before owner can reset state
@@ -328,6 +353,8 @@ contract RandomCoin is Ownable {
         // how can we start a timer and then "ensure" that the contract gets reset to funding state afterwards?
         // this may not be directly possible, so can we make a modifier for ALL other functions that resets the state if eligible to do so ?
         
+        // return true for testing
+        return true;
     }
 
     // IDEA: owner can reset state, but ONLY after some window of time has passed allowing people enough time to withdraw (e.g. 2 weeks or something)
@@ -336,6 +363,7 @@ contract RandomCoin is Ownable {
     onlyOwner()
     stateIsLiquidating()
     blockWaitTimeHasElapsed()
+    returns(bool)
     {
         // ALL relevant variables need to be handled here - check constructor / all state vars
         // worth resetting availablePayout to 0 or something here, to keep resetting "cleaner" ? Logically unnecessary I think
@@ -348,5 +376,8 @@ contract RandomCoin is Ownable {
         // emit relevant event(s)
         emit FullContractReset(msg.sender);
         emit StateChangeToFunding();
+
+        // return true for testing
+        return true;
     }
 }

@@ -183,7 +183,8 @@ contract RandomCoin is Ownable {
     }
 
     function randomRate()
-    private
+    //private
+    public // for testing
     view
     returns(uint)
     {
@@ -436,7 +437,7 @@ contract RandomCoin is Ownable {
     function resetState()
     public
     onlyOwner()
-    stateIsLiquidating()
+    //stateIsLiquidating()  // redundant w/ blockWaitTimeHasElapsed()
     blockWaitTimeHasElapsed()
     returns(bool)
     {

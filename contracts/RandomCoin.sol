@@ -83,6 +83,8 @@ contract RandomCoin is Ownable {
     uint256 public blockWaitTime;
     uint256 public minimumPegInBaseAmount; // liquidation haircut
     uint256 public minimumPegInMultiplier;
+    uint256 public minTxToActivate;
+    uint256 public minBalanceToActivate;
 
     RDCTokenFactory private rdct;
     RDCToken public rdc;
@@ -145,6 +147,17 @@ contract RandomCoin is Ownable {
         _;
     }
 
+    // mechanism to allow update from funding to active
+    modifier canChangeStateToActive() {
+        _;
+        if (state == State.Funding) {
+            if (txCount >= minTxToActivate || address(this).balance >= minBalanceToActivate) {
+                state = State.Active;
+                emit StateChangeToActive();
+            }
+        }
+    }
+
     // declare constructor + other functions
     constructor()
     public
@@ -160,6 +173,8 @@ contract RandomCoin is Ownable {
         expectedRate = 100;  // think about this... maybe higher for better decimal approximation ?
         halfWidth = 50;
         blockWaitTime = 5760 * 14;  // 2 weeks seems reasonable I guess 
+        minTxToActivate = 10;
+        minBalanceToActivate = 10 finney;
         rdct = RDCTokenFactory(this);
         rdc = rdct.createRDCToken();
         state = State.Funding;
@@ -226,6 +241,7 @@ contract RandomCoin is Ownable {
     payable
     notLiquidating()
     canAffordPegIn()
+    canChangeStateToActive()
     returns(uint)
     {
         // logic for checking whether holder is in index is now in IterableBalances.sol
@@ -426,12 +442,14 @@ contract RandomCoin is Ownable {
     {
         // ALL relevant variables need to be handled here - check constructor / all state vars
         // worth resetting availablePayout to 0 or something here, to keep resetting "cleaner" ? Logically unnecessary I think
+        haircut = 0; // I think this should be reset here
         averageRate = expectedRate;  // maybe ? or shoud we track this over longer horizons?
+        lastAvgRate = 0;
+        txCount = 0;
         // if using rdc instead of rdcBalances, should just check that we have, in fact, created an instance (should always be true)
         require(rdcCreated, "No RDCToken instance has been created");
         state = State.Funding;
         txLockMutex = false;  // hopefully redundant
-        haircut = 0; // I think this should be reset here
 
         // emit relevant event(s)
         emit FullContractReset(msg.sender);

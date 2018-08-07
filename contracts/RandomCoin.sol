@@ -1,12 +1,6 @@
 pragma solidity ^0.4.13;
 
-import "./IBFactory.sol";  // deprecate this
 import "./RDCTokenFactory.sol";  // I guess this brings Ownable and SafeMath along for the ride ?
-//import "installed_contracts/zeppelin/contracts/ownership/Ownable.sol";
-//import "installed_contracts/zeppelin/contracts/math/SafeMath.sol";
-// once I have created a "RandomCoinToken" contract or whatever I call it, replace IBFactory with that
-// to do this, may want to have a "RDCTokenFactory" contract, with a one-time bool (how ?) indicating that this contract has only manufactured 1 instance
-
 
 // TODO: use SafeMath wherever making calculations here (and in other contracts)
 // possibly implement equitableDestruct as a base contract to inherit here and in RandomLotto
@@ -15,7 +9,6 @@ import "./RDCTokenFactory.sol";  // I guess this brings Ownable and SafeMath alo
 // also possible: use an autodeprecation-style pattern to manage the timing of state periods
 // (this would be applicable to RandomLotto.sol as well)
 // should owner be able to force selfdestruct on these (Mortal design pattern) ? or are equitable liquidations sufficient?
-// for testing purposes, can have functions returns(bool success) if they don't return anything else
 // possible TODO: circuit breaker if something goes wrong with payouts ?
 
 // idea: when resetting contract state, have the old IB object "archived" after a while; can still withdraw but maybe less
@@ -29,13 +22,16 @@ contract RandomCoin is Ownable {
     State / storage variables:
     --------------------------
     availablePayout         : should be set to CURRENT BALANCE of eth at this contract (minus some % to cover fees?) when liquidation occurs
+    haircut                 : effective fee on peg-in to help maintain the peg; could make this resettable by owner I guess via minimumPegInBaseAmount
     averageRate             : should have EV of 1 (or 100; index level)
+    lastAvgRate             : used to recalculate averageRate as transactions occur
+    txCount                 : used to recalculate averageRate as transactions occur
     expectedRate            : hardcode this as a point of comparison for averageRate
     halfWidth               : half interval around expectedRate to get random rates from
     liquidationBlockNumber  : block height at liquidation event
     blockWaitTime           : blocks to wait after liquidation before state reset is allowed
-    //ibf                     : factory to create new IterableBalance tracking contracts ("objects")
-    //rdcBalances             : IterableBalances instance to track ownership of RNDC (all pegged-in accts)
+    minimumPegInBaseAmount  : effective liquidation haircut to help defend the peg
+    minimumPegInMultiplier  : multiplier on top of minimumPegInBaseAmount to set the minimum value of a peg-in transaction
     rdct                    : factory to create a new (single) instance of the RandomCoinToken contract
     rdc                     : RandomCoinToken contract instance
     State                   : enum of states this contract can be in
@@ -50,9 +46,11 @@ contract RandomCoin is Ownable {
     TriggeredEquitableLiquidation   :
     TriggeredEquitableDestruct      :
     StateChangeToFunding            :
-    event StateChangeToActive       :
-    event StateChangeToLiquidating  :
-    event FullContractReset         :
+    StateChangeToActive             :
+    StateChangeToLiquidating        :
+    MadeEquitableWithdrawal         : 
+    FullContractReset               :
+
 
     Modifiers:
     ----------
@@ -60,53 +58,40 @@ contract RandomCoin is Ownable {
     stateIsActive                   :
     stateIsLiquidating              :
     blockWaitTimeHasElapsed         :
-    safeExternalCalls               : deprecated; call mutex directly 
+    canAffordPegIn                  : 
 
     Notes:
     ------
-    - averageRate needs to be managed without floats for now
+    - averageRate (and all math, for that matter) needs to be managed without floats for now
     - averageRate should ideally create (somewhere) a record of its past values, for frontend TS graphs
-    - rdcBalances needs to be "reinstantiated" every time this contract resets (i.e. if liquidated)
-    - use (IB.balances[add] / IB.totalBalance) * availablePayout to assign equitable balances to holders
+    - *** need to consider how holders of rdc from prior "round" of the life of this contract affects its viability
+    - use (rdc.balanceOf(add) / rdc.totalSupply) * availablePayout to assign equitable balances to holders
     - txLockMutex may be better replaced by something in an OpenZeppelin library
 
     */
 
     using SafeMath for uint256;
     
-    // TODO: calculate this MINUS SOME % TO COVER FEES (or just haircut) when liquidation is called
     uint256 availablePayout;
     uint256 private haircut;
-    // TODO: update this as pegIn() / pegOut() calls are made
     uint256 averageRate;
-    uint256 lastAvgRate;
-    uint256 txCount;  // use this + last rate to adjust averageRage
-    // e.g. when new peg in/out tx is processed:
-    // averageRage = ((lastAvgRate * txCount) + [new random rate]) / txCount +1, then increment txCount
-    // TODO: implement the above
+    uint256 private lastAvgRate;
+    uint256 private txCount;  // use this + last rate to adjust averageRage
     uint256 expectedRate;
-    uint halfWidth;
+    uint256 halfWidth;
     uint256 liquidationBlockNumber;
     uint256 blockWaitTime;
     uint256 minimumPegInBaseAmount; // liquidation haircut
     uint256 minimumPegInMultiplier;
-    
-    IBFactory ibf;
-    IterableBalances rdcBalances;
 
     RDCTokenFactory rdct;
     RDCToken rdc;
 
-    // TODO: import ERC20 token contract from OpenZeppelin, instantiate RandomCoin token, use IB to track it (maybe ?)
-    // does "randomcoin" need to be an actual "token"? should it be? I guess that is more interesting tbh... learn about how to do this
-    // (alternative is simply using a mapping as the sole arbiter of balances; all "trading" done with the contract only via peg-in / peg-out)
-    // if RNDC is a TOKEN, IterableBalances is kind of pointless because then you need to keep states in sync
     // harder to recycle state of this contract and start a "new round"
     // I guess you could let people hold on to their RNDC from previous rounds, and if they missed a cash-out state they could peg out on next round
-    // but then how to calculate "equitable payouts" ? equitable to "last round", or equitable to OVERALL RNDC outstanding ?
+    // *** but then how to calculate "equitable payouts" ? equitable to "last round", or equitable to OVERALL RNDC outstanding ?
     // from mechanism design perspective, an ERC20 token may be better
     // (disincentivizes rapid peg-in / peg-out to try to force a liquidation after some disproportionate peg-outs)
-
 
     // state management
     enum State { Funding, Active, Liquidating }
@@ -156,19 +141,6 @@ contract RandomCoin is Ownable {
         _;
     }
 
-    // TODO: check this and then call it where appropriate
-    // consider making this a library to be imported here and RandomLotto
-    // this actually may not work as a modifier as-is due to require calls at start of functions
-    // could try to add parameters here to pass through but maybe not worth it tbh
-    /*
-    modifier safeExternalCalls() {
-        require(!txLockMutex, "txLockMutex must be unlocked");
-        txLockMutex = true;
-        _;
-        txLockMutex = false;
-    }
-    */
-
     // declare constructor + other functions
     constructor()
     public
@@ -184,8 +156,6 @@ contract RandomCoin is Ownable {
         expectedRate = 100;  // think about this... maybe higher for better decimal approximation ?
         halfWidth = 50;
         blockWaitTime = 5760 * 14;  // 2 weeks seems reasonable I guess 
-        ibf = IBFactory(this);          // deprecate this later
-        rdcBalances = ibf.createIB();   // deprecate this later; replace w/ rdc
         rdct = RDCTokenFactory(this);
         rdc = rdct.createRDCToken();
         state = State.Funding;
@@ -259,10 +229,9 @@ contract RandomCoin is Ownable {
         address _add = msg.sender;
         uint _rndrate = randomRate();
         uint _rndamt = msg.value.mul(_rndrate);  // can I use SafeMath here ? need to recast randomRate return variable as uint256?
-        rdcBalances.addBalance(_add, _rndamt);  // add the RANDOMCOIN balance, not eth sent amount
-        rdc.mint(_add, _rndamt);
+        rdc.mint(_add, _rndamt);  // add the RANDOMCOIN balance, not eth sent amount
         // capture the haircut to deduct from availablePayout
-        haircut += minimumPegInBaseAmount;
+        haircut = haircut.add(minimumPegInBaseAmount);
         // update the value of averageRate
         updateAverageRate(_rndrate);
         // emit the PeggedIn event
@@ -286,7 +255,6 @@ contract RandomCoin is Ownable {
         address _add = msg.sender;
         // logic for checking randomcoin balance has been moved to IterableBalances.sol
         // BUT still need to check here I think - otherwise sender could easily force equitableDestruct()
-        require(rdcBalances.balances(_add) >= _amt, "Insufficient balance to peg out");
         require(rdc.balanceOf(_add) >= _amt, "Insufficient balance to peg out");
 
         // calculate amount of eth to send (DOES THIS WORK WITHOUT FLOATS ??? MIGHT NEED TO RECONFIGURE MATH FORMULA HERE)
@@ -300,8 +268,7 @@ contract RandomCoin is Ownable {
         }
         // otherwise, send the toSend amount to _add (after switching the mutex)
         txLockMutex = true;
-        rdcBalances.deductBalance(_add, _amt);  // deduct the RANDOMCOIN balance, not eth payout amt
-        rdc.transferFrom(_add, address(this), _amt);
+        rdc.transferFrom(_add, address(this), _amt);  // deduct the RANDOMCOIN balance, not eth payout amt
         _add.transfer(_rndamt);
         // update the value of averageRate
         updateAverageRate(_rndrate);
@@ -322,10 +289,11 @@ contract RandomCoin is Ownable {
         // check the mutex for payable function
         require(!txLockMutex, "txLockMutex must be unlocked");
         address _add = msg.sender;
-        uint _payout = (rdcBalances.balances(_add).div(rdcBalances.totalBalance())).mul(availablePayout);
-        uint _payout2 = (rdc.balanceOf(_add).div(rdc.totalSupply())).mul(availablePayout);
-        // FOR TESTING ONLY RIGHT NOW:
-        require(_payout == _payout2, "Inconsistent accounting between rdc and rdcBalances");
+        // calculate payout but without this contract claiming its share (?)
+        // e.g. instead of using rdc.totalSupply() as the denominator, use (rdc.totalSupply - rdc.balanceOf(address(this)))
+        // this would alleviate the implicit extra haircut to everyone as prior holders failed to cash out their equitable share during earlier liquidiations
+        uint _this_bal = rdc.balanceOf(address(this));
+        uint _payout = (rdc.balanceOf(_add).div(rdc.totalSupply().sub(_this_bal))).mul(availablePayout);
         // set the lock mutex before transfer
         txLockMutex = true;
         _add.transfer(_payout);
@@ -351,6 +319,7 @@ contract RandomCoin is Ownable {
 
         // emit relevant events
         emit TriggeredEquitableDestruct();
+        
         // return true for testing
         return true;
     }
@@ -366,6 +335,7 @@ contract RandomCoin is Ownable {
 
         // emit relevant events
         emit TriggeredEquitableLiquidation(msg.sender);
+        
         // return true for testing
         return true;
     }
@@ -380,12 +350,8 @@ contract RandomCoin is Ownable {
         // set liquidation block height to start "countdown" before owner can reset state
         liquidationBlockNumber = block.number;
 
-        // set availablePayout (minus some percentage to cover fees ?)
-        // fees should be paid by caller of this function actually, not this contract, so below should be OK
-        // however, we could haircut this by some flat fee (smallish) and require that any pegIn values be at least, say, 10x this small amount
-        // in this case, set availablePayout to the result of a call to a new function that checks rdcBalance.numHolders
-        // and multiplies that by the fee, deducting the result from address(this).balance to get the return value
-        availablePayout = address(this).balance - haircut;
+        // set availablePayout (minus the haircut accumulated so far via pegIn transactions)
+        availablePayout = address(this).balance.sub(haircut);
 
         state = State.Liquidating;
         emit StateChangeToLiquidating();
@@ -408,8 +374,8 @@ contract RandomCoin is Ownable {
         // ALL relevant variables need to be handled here - check constructor / all state vars
         // worth resetting availablePayout to 0 or something here, to keep resetting "cleaner" ? Logically unnecessary I think
         averageRate = expectedRate;  // maybe ? or shoud we track this over longer horizons?
-        rdcBalances = ibf.createIB();  // unless we switch to RNDC token, perhaps
         // if using rdc instead of rdcBalances, should just check that we have, in fact, created an instance (should always be true)
+        require(rdcCreated, "No RDCToken instance has been created");
         state = State.Funding;
         txLockMutex = false;  // hopefully redundant
         haircut = 0; // I think this should be reset here

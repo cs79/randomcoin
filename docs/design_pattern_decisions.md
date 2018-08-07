@@ -16,3 +16,10 @@ Should also use:
 
 Stretch:
 * relay / some form of upgradeability
+
+Other design notes:
+* Explain why I used equitable destruction (incentivize people to peg in since they will always get something "fair" out)
+* explain why I designed the payout calculation the way I did (intra-round fairness, if I designed it right - compare to dilution in startup cap tables as they raise new funding rounds)
+* explain why lotto ("easy" way to collect some extra funding to defend the peg)
+* explain why haircut (start gathering capital for defense of peg; haircut rate is adjustable)
+* anything else that I need to be able to justify to myself / others

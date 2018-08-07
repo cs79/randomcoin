@@ -21,7 +21,8 @@ contract IterableBalances {
     event DeductedBalance(address _add, uint _amt);
 
     constructor() public {
-        maxIndex = 0;
+        maxIndex = 1;  // I think this should be 1 instead of 0; reserve 0 as a check for address non-existence
+        // (assign a deleted address to index 0 in holders)
         totalBalance = 0;
     }
 

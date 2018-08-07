@@ -4,32 +4,35 @@ pragma solidity ^0.4.13;
 // if this seems to work OK in this contract, add it to RandomCoin.sol as well
 // also check if there is any SafeMath library that can be imported in a similar fashion
 import "installed_contracts/zeppelin/contracts/ownership/Ownable.sol";
+import "installed_contracts/zeppelin/contracts/math/SafeMath.sol";
 
 contract RandomLotto is Ownable {
     // should be "round-based" with a minimum number of blocks to pass, plus delay if not enough participants have entered within that limit
     // so, state machine, basically -- see: https://solidity.readthedocs.io/en/develop/common-patterns.html?#state-machine
     // additional function to withdraw your bet should be allowed if the number of blocks have passed but no one else has joined
     // (could just send back after X blocks, but should incentivize staying in)
-    //address owner;  -- redundant when using Ownable.sol
-    uint ticketPrice;  // price in wei
-    mapping (address => uint) ticketBalances;
-    mapping (address => uint) currentPayouts;  // maybe...
-    address[] ticketHolders;  // not sure if necessary ?  use IterableBalances for this? or wrong structure?
-    uint lastDraw;  // rename to "lastDrawAt" ?
+    
+    using SafeMath for uint256;
+
+    uint public ticketPrice;  // price in wei
+    mapping (address => uint) private ticketBalances;
+    mapping (address => uint) public currentPayouts;  // maybe...
+    address[] private ticketHolders;  // not sure if necessary ?  use IterableBalances for this? or wrong structure?
+    uint public lastDraw;  // rename to "lastDrawAt" ?
     enum State {
         SellingTickets,
         DrawingWinner,
         PayingOut,
         Liquidating
     }
-    State state;
-    bool txLockMutex;
-    uint totalTickets;  // to store total number of issued tickets; !!! needs to be reset when lottery resets !!!
-    uint availablePayout;  // to store contract balance snapshot in case of equitable liquidation event
+    State public state;
+    bool private txLockMutex;
+    uint private totalTickets;  // to store total number of issued tickets; !!! needs to be reset when lottery resets !!!
+    uint private availablePayout;  // to store contract balance snapshot in case of equitable liquidation event
 
     // should have a declared address pointing to the RandomCoin.sol deployed contract instance
     // this needs to be settable by the owner; will be required for testing
-    address rdcContractAddress;
+    address private rdcContractAddress;
 
     // idea from Medium post here: https://medium.com/@promentol/lottery-smart-contract-can-we-generate-random-numbers-in-solidity-4f586a152b27
     // use a "state" state variable for accepting tickets / drawing the value
@@ -65,14 +68,15 @@ contract RandomLotto is Ownable {
         _;
     }
 
-    constructor() public
+    constructor()
+    public
     {
         owner = msg.sender;
         ticketPrice = 1000;  // I dunno, this may not matter a lot
         lastDraw = block.number;
         state = State.SellingTickets;
         txLockMutex = false;
-        availablePayout = msg.value;  // I guess ? or set to 0?
+        availablePayout = 0;  // I guess ? or set to 0?
     }
 
     function getTickets(address _add)
@@ -83,10 +87,10 @@ contract RandomLotto is Ownable {
     {
         // credit the balance of the paying address w/ tickets based on price
         // (could eliminate price and have 1 ticket = 1 wei I guess, but maybe better to divide to avoid overflow)
-        uint _tickets = (msg.value / ticketPrice);
-        ticketBalances[_add] += _tickets;
-        totalTickets += _tickets;
-        availablePayout += msg.value;
+        uint _tickets = (msg.value.div(ticketPrice));
+        ticketBalances[_add] = ticketBalances[_add].add(_tickets);
+        totalTickets = totalTickets.add(_tickets);
+        availablePayout = availablePayout.add(msg.value);
         // emit the relevant event
         emit SoldTickets(_add, _tickets);
         // return the amount of tickets purchased
@@ -145,18 +149,6 @@ contract RandomLotto is Ownable {
         return true;
     }
 
-    /* DEPRECATED - USE PULL PAYMENTS INSTEAD AS IN RandomCoin.sol
-    function sendPayouts()
-    public
-    payable
-    {
-        // calls calcPayouts and then sends the appropriate balances to the addresses in the mapping
-        // honestly this probably isn't going to work -- just have a state enum that has a "Payout" state
-        // and during Payout period people can withdraw their winnings
-        // this has the extra benefit of potentially capturing more ether if it is coded in such a way as to take any ether for the peg defense pot which is not claimed within a certain window of time
-        
-    }*/
-
     // use this instead of sendPayouts
     function claimPayout()
     public
@@ -187,13 +179,13 @@ contract RandomLotto is Ownable {
     returns(uint)
     {
         // check the mutex for payable function
-        require(!txLockMutex);
+        require(!txLockMutex, "txLockMutex must be unlocked");
         address _add = msg.sender;
 
         // update this to reference the mapping instead of the IterableBalances contract instance
         // (... or change to use an IterableBalances instance instead of a mapping for tickets)
         //uint _payout = (rdcBalances.balances(_add) / rdcBalances.totalBalance()) * availablePayout;
-        uint _payout = (ticketBalances[_add] / totalTickets) * availablePayout;
+        uint _payout = (ticketBalances[_add].div(totalTickets)).mul(availablePayout);
     
         // set the lock mutex before transfer
         txLockMutex = true;

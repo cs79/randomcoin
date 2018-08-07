@@ -72,20 +72,22 @@ contract RandomCoin is Ownable {
 
     using SafeMath for uint256;
     
-    uint256 availablePayout;
+    uint256 private availablePayout;
     uint256 private haircut;
-    uint256 averageRate;
+    uint256 public averageRate;
     uint256 private lastAvgRate;
     uint256 private txCount;  // use this + last rate to adjust averageRage
-    uint256 expectedRate;
-    uint256 halfWidth;
-    uint256 liquidationBlockNumber;
-    uint256 blockWaitTime;
-    uint256 minimumPegInBaseAmount; // liquidation haircut
-    uint256 minimumPegInMultiplier;
+    uint256 public expectedRate;
+    uint256 private halfWidth;
+    uint256 public liquidationBlockNumber;
+    uint256 public blockWaitTime;
+    uint256 public minimumPegInBaseAmount; // liquidation haircut
+    uint256 public minimumPegInMultiplier;
 
-    RDCTokenFactory rdct;
-    RDCToken rdc;
+    RDCTokenFactory private rdct;
+    RDCToken public rdc;
+    // is the below redundant with address(address(this).rdc) ?
+    address public rdcTokenAddress;  // for users to trade tokens with each other
 
     // harder to recycle state of this contract and start a "new round"
     // I guess you could let people hold on to their RNDC from previous rounds, and if they missed a cash-out state they could peg out on next round
@@ -96,14 +98,16 @@ contract RandomCoin is Ownable {
     // state management
     enum State { Funding, Active, Liquidating }
     State state;
-    bool txLockMutex; // possibly redundant with transfer() calls
-    bool rdcCreated;  // if this never gets checked anywhere, possibly eliminate
+    bool private txLockMutex; // possibly redundant with transfer() calls
+    bool private rdcCreated;  // if this never gets checked anywhere, possibly eliminate
 
     // declare events
     // do any of these need to be indexed ? any other thing we want to log ?
     // does it make sense to log "XXX failed" type events?  or are these self-evident in the logs?
     event PeggedIn(address _add, uint256 _amt);
     event PeggedOut(address _add, uint256 _amt);
+    event ChangedPegInBase(uint256 _amt);
+    event ChangedBlockWaitTime(uint256 _time);
     event TriggeredEquitableLiquidation(address _add);
     event TriggeredEquitableDestruct();
     event StateChangeToFunding();
@@ -137,7 +141,7 @@ contract RandomCoin is Ownable {
     }
 
     modifier canAffordPegIn() {
-        require(msg.value >= (minimumPegInBaseAmount * minimumPegInMultiplier), "Insufficient peg in value");
+        require(msg.value >= (minimumPegInBaseAmount.mul(minimumPegInMultiplier)), "Insufficient peg in value");
         _;
     }
 
@@ -259,7 +263,7 @@ contract RandomCoin is Ownable {
 
         // calculate amount of eth to send (DOES THIS WORK WITHOUT FLOATS ??? MIGHT NEED TO RECONFIGURE MATH FORMULA HERE)
         uint _rndrate = randomRate();
-        uint _rndamt = _amt / _rndrate; // maybe rename - _rndamt here is a "random amount of eth"
+        uint _rndamt = _amt.div(_rndrate); // maybe rename - _rndamt here is a "random amount of eth"
 
         // if contract would be drained by peg out, allow equitable withdrawal of whatever is left
         if (_rndamt > address(this).balance) {
@@ -278,6 +282,55 @@ contract RandomCoin is Ownable {
         emit PeggedOut(_add, _amt);
         // return the amount pegged out
         return _amt;
+    }
+
+    // this is something of a potential reputational risk
+    // a malicious owner could abuse this; maybe put a timer on its use
+    // (or don't use it at all)
+    function changePegInBase(uint256 _new_base)
+    public
+    onlyOwner()
+    returns(uint256)
+    {
+        // 10 percent window is sort of arbitrary currently
+        // also nothing really prevents you from changing this rapidly and repeatedly atm...
+        // maybe add in a timer for this as well ?
+        uint256 _lower_bound = minimumPegInBaseAmount.mul(90).div(100);
+        uint256 _upper_bound = minimumPegInBaseAmount.mul(110).div(100);
+        require(_new_base >= _lower_bound, "Cannot lower minimumPegInBaseAmount that far");
+        require(_new_base <= _upper_bound, "Cannot raise minimumPegInBaseAmount that far");
+
+        // change the value of minimumPegInBaseAmount
+        minimumPegInBaseAmount = _new_base;
+
+        // emit the relevant event
+        emit ChangedPegInBase(_new_base);
+
+        // return the new value of minimumPegInBaseAmount
+        return _new_base;
+    }
+
+    // same caveats re: abuse apply here as to changePegInBase
+    // use this with caution; maybe don't implement at all
+    function changeBlockWaitTime(uint256 _new_wt)
+    public
+    onlyOwner()
+    returns(uint256)
+    {
+        uint256 _lower_bound = blockWaitTime.mul(90).div(100);
+        uint256 _upper_bound = blockWaitTime.mul(110).div(100);
+        require(_new_wt >= _lower_bound, "Cannot lower blockWaitTime that far");
+        require(_new_wt <= _upper_bound, "Cannot raise blockWaitTime that far");
+
+        // change the value of blockWaitTime
+        blockWaitTime = _new_wt;
+
+        // emit the relevant event
+        emit ChangedBlockWaitTime(_new_wt);
+
+        // return the new value of blockWaitTime
+        return _new_wt;
+
     }
 
     function equitableWithdrawal()  // maybe rename this...

@@ -1,20 +1,23 @@
-pragma solidity ^0.4.13;
+pragma solidity ^0.4.23;
 
-import "./RDCTokenFactory.sol";  // I guess this brings Ownable and SafeMath along for the ride ?
+// try to put both the RDCToken and RandomCoin functionality into this file
+// can keep as separate contracts; just need to ensure they're actually together
 
-// TODO: use SafeMath wherever making calculations here (and in other contracts)
-// possibly implement equitableDestruct as a base contract to inherit here and in RandomLotto
+//import "./MintableToken.sol";  // changed to copy in this directory rather than openzeppelin dir
+import "../installed_contracts/zeppelin/contracts/token/MintableToken.sol";
 
-// possible TODO: use ENS to register this contract's name, which RandomLotto can send to after separate deployment
-// also possible: use an autodeprecation-style pattern to manage the timing of state periods
-// (this would be applicable to RandomLotto.sol as well)
-// should owner be able to force selfdestruct on these (Mortal design pattern) ? or are equitable liquidations sufficient?
-// possible TODO: circuit breaker if something goes wrong with payouts ?
+contract RDCToken is MintableToken {
+    string public constant name = "RDCToken";
+    string public constant symbol = "RDC";
 
-// idea: when resetting contract state, have the old IB object "archived" after a while; can still withdraw but maybe less
-// (at most what you could withdraw should be the lower of your previous entitled balance, or current prorated share)
-// may want to not do this at all though, and if anyone does not withdraw their allotted balance within the withdrawal period, it stays with the contract
-// this latter is kinda sucky though for users... disincentivizes adoption
+    // Should be constructed by the RandomCoin contract (exactly once - bool for this?)
+    constructor() public {
+        owner = msg.sender;
+    }
+
+    // EXTREMELY IMPORTANT QUESTION: DOES THIS NEED TO IMPLEMENT ALL NAMED METHODS IN THE CONTRACTS IT INHERITS FROM?
+    
+}
 
 contract RandomCoin is Ownable {
     /*
@@ -86,7 +89,7 @@ contract RandomCoin is Ownable {
     uint256 public minTxToActivate;
     uint256 public minBalanceToActivate;
 
-    RDCTokenFactory private rdct;
+    //RDCTokenFactory private rdct;
     RDCToken public rdc;
     // is the below redundant with address(address(this).rdc) ?
     address public rdcTokenAddress;  // for users to trade tokens with each other
@@ -104,8 +107,6 @@ contract RandomCoin is Ownable {
     bool private rdcCreated;  // if this never gets checked anywhere, possibly eliminate
 
     // declare events
-    // do any of these need to be indexed ? any other thing we want to log ?
-    // does it make sense to log "XXX failed" type events?  or are these self-evident in the logs?
     event PeggedIn(address _add, uint256 _amt);
     event PeggedOut(address _add, uint256 _amt);
     event ChangedPegInBase(uint256 _amt);
@@ -117,8 +118,6 @@ contract RandomCoin is Ownable {
     event StateChangeToLiquidating();
     event MadeEquitableWithdrawal(address _add, uint _amt);
     event FullContractReset(address _add);  // maybe; kind of redundant w/ StateChangeToFunding
-
-    // TODO: add more events (or just return values to functions) to make test writing easier
 
     // declare modifiers
     modifier notLiquidating() {
@@ -175,8 +174,8 @@ contract RandomCoin is Ownable {
         blockWaitTime = 5760 * 14;  // 2 weeks seems reasonable I guess 
         minTxToActivate = 10;
         minBalanceToActivate = 10 finney;
-        rdct = RDCTokenFactory(this);
-        rdc = rdct.createRDCToken();
+        //rdct = RDCTokenFactory(this);
+        rdc = new RDCToken();
         state = State.Funding;
         txLockMutex = false;
         rdcCreated = true;
@@ -273,9 +272,9 @@ contract RandomCoin is Ownable {
     {
         // check the mutex to prevent reentrancy on payable transaction
         require(!txLockMutex, "txLockMutex must be unlocked");
+        
+        // check that account has sufficient balance
         address _add = msg.sender;
-        // logic for checking randomcoin balance has been moved to IterableBalances.sol
-        // BUT still need to check here I think - otherwise sender could easily force equitableDestruct()
         require(rdc.balanceOf(_add) >= _amt, "Insufficient balance to peg out");
 
         // calculate amount of eth to send (DOES THIS WORK WITHOUT FLOATS ??? MIGHT NEED TO RECONFIGURE MATH FORMULA HERE)
@@ -291,12 +290,16 @@ contract RandomCoin is Ownable {
         txLockMutex = true;
         rdc.transferFrom(_add, address(this), _amt);  // deduct the RANDOMCOIN balance, not eth payout amt
         _add.transfer(_rndamt);
+        
         // update the value of averageRate
         updateAverageRate(_rndrate);
+        
         // release the mutex after external call
         txLockMutex = false;
+        
         // emit the PeggedOut event
         emit PeggedOut(_add, _amt);
+        
         // return the amount pegged out
         return _amt;
     }
@@ -347,7 +350,6 @@ contract RandomCoin is Ownable {
 
         // return the new value of blockWaitTime
         return _new_wt;
-
     }
 
     function equitableWithdrawal()  // maybe rename this...

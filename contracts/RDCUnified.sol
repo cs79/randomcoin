@@ -104,9 +104,10 @@ contract RandomCoin is Ownable {
     enum State { Funding, Active, Liquidating }
     State state;
     bool private txLockMutex; // possibly redundant with transfer() calls
-    bool private rdcCreated;  // if this never gets checked anywhere, possibly eliminate
+    bool public rdcCreated;  // changed to public for testing
 
     // declare events
+    event DeployedRDC();
     event PeggedIn(address _add, uint256 _amt);
     event PeggedOut(address _add, uint256 _amt);
     event ChangedPegInBase(uint256 _amt);
@@ -174,11 +175,27 @@ contract RandomCoin is Ownable {
         blockWaitTime = 5760 * 14;  // 2 weeks seems reasonable I guess 
         minTxToActivate = 10;
         minBalanceToActivate = 10 finney;
-        //rdct = RDCTokenFactory(this);
-        rdc = new RDCToken();
+        /*
+        If I do not instantiate this in the constructor, tests (as of 8/8/18) will run and pass
+        solution may be to instantiate it after the fact, but I don't know how to do that exactly
+        try doing it without a factory first, but maybe factory would be better if i can't figure that out
+
+        rdc = new RDCToken();*/  // seeing if i can avoid gas constraints with smaller constructor
         state = State.Funding;
         txLockMutex = false;
+        rdcCreated = false;  // this may be a better pattern actually - have a modifier that locks certain functionality when this is false
+    }
+
+    // testing this out for now
+    function deployRDC()
+    public
+    onlyOwner()
+    returns(bool)
+    {
+        rdc = new RDCToken();
         rdcCreated = true;
+        emit DeployedRDC();
+        return true;
     }
 
     function randomRate()

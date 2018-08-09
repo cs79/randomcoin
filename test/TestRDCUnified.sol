@@ -70,6 +70,13 @@ contract TestRDCUnified {
         //Assert.equal(expected_bwt, _this_bwt, "blockWaitTime should be equal to 5760 * 14");
     }
 
+    /*function testRDCDeployment() public {
+        RandomCoin _this_rc = new RandomCoin();
+        _this_rc.deployRDC();
+        bool expected = true;
+        Assert.equal(expected, _this_rc.rdcCreated(), "The deployed RandomCoin contract should own the RDCToken contract");
+    }*/
+
     function testRandomRate() public {
         RandomCoin _this_rc = new RandomCoin();
 

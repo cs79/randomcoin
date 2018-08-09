@@ -89,7 +89,8 @@ contract RandomCoin is Ownable {
     uint256 public minTxToActivate;
     uint256 public minBalanceToActivate;
 
-    //RDCTokenFactory private rdct;
+    // to be deployed after instantiating this contract
+    // should other functions force this (like PegIn()) if it doesn't exist yet ?
     RDCToken public rdc;
     // is the below redundant with address(address(this).rdc) ?
     address public rdcTokenAddress;  // for users to trade tokens with each other
@@ -158,6 +159,13 @@ contract RandomCoin is Ownable {
         }
     }
 
+    // modifier to check if the RDCToken contract (as owned by this contract) has been deployed
+    // if necessary, can also deploy separately and then change ownership to this contract if I can't get this working
+    modifier RDCTokenDeployed() {
+        require(rdcCreated, "RDCToken instance must be deployed");
+        _;
+    }
+
     // declare constructor + other functions
     constructor()
     public
@@ -189,15 +197,18 @@ contract RandomCoin is Ownable {
     // testing this out for now
     function deployRDC()
     public
-    onlyOwner()
+    //onlyOwner()  // turning this off for testing; can also get away without using this since the ownership of rdc will be this, and limited to 1
     returns(bool)
     {
+        require(!rdcCreated, "RDCToken instance has already been created");
         rdc = new RDCToken();
+        rdcTokenAddress = address(rdc);
         rdcCreated = true;
         emit DeployedRDC();
         return true;
     }
 
+    
     function randomRate()
     //private
     public // for testing
@@ -252,6 +263,7 @@ contract RandomCoin is Ownable {
         // then increment txCount
         txCount = txCount.add(1);
     }
+
 
     function pegIn()
     public

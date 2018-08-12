@@ -4,7 +4,7 @@ import "truffle/Assert.sol";
 import "truffle/DeployedAddresses.sol";
 import "../contracts/RDCUnified.sol";
 
-// TODO: move existing tests from TestRDCToken to here
+// TODO: find out if there is an easy way to set the testing contract as Owner of tested contract(s)
 
 contract TestRDCUnified {
 
@@ -15,6 +15,7 @@ contract TestRDCUnified {
 
     RandomCoin rc;
     RDCToken rdc;
+    enum State { Funding, Active, Liquidating }
     
     // context setup / teardown to avoid running out of gas while testing
     function beforeEachAgain() public {
@@ -25,6 +26,9 @@ contract TestRDCUnified {
     // TODO: try and see if I can set up an owned instance of RandomCoin in beforeEachAgain (no new RDCToken())
     // if that works, see if it can additionally call deployRDC() without running out of gas
     // if so, rewrite the tests below
+    // or, declare RandomCoin rc = RandomCoin(DeployedAddresses.RandomCoin()); at the top
+    // and in the beforeEachAgain hook, run the rc.deployRDC() function
+    // [maybe]
 
 
     // RDCToken contract tests:
@@ -76,17 +80,20 @@ contract TestRDCUnified {
     // as-is this isn't a very good test
     function testRandomCoinConstructor() public {
         uint256 expected_ar = 100;
-        //uint expected_hw = 50;
-        //uint expected_bwt = 5760 * 14;
+        uint256 expected_bwt = 5760 * 14;
+        uint256 expected_mpib = 100 szabo;
+        //State expected_state = State.Funding;
 
-        uint _this_ar = rc.averageRate();
-        //uint _this_hw = _this_rc.halfWidth();
-        //uint _this_bwt = _this_rc.blockWaitTime();
+        uint256 _this_ar = rc.averageRate();
+        uint256 _this_bwt = rc.blockWaitTime();
+        uint256 _this_mpib = rc.minimumPegInBaseAmount();
+        //State _this_state = rc.state();
 
         // not sure if test can / should call multiple assertions like this, or make different tests
         Assert.equal(expected_ar, _this_ar, "averageRate should be equal to 100");
-        //Assert.equal(expected_hw, _this_hw, "halfWidth should be equal to 50");
-        //Assert.equal(expected_bwt, _this_bwt, "blockWaitTime should be equal to 5760 * 14");
+        Assert.equal(expected_bwt, _this_bwt, "blockWaitTime should be equal to 5760 * 14");
+        Assert.equal(expected_mpib, _this_mpib, "minimumPegInBaseAmount should be equal to 100 szabo");
+        //Assert.equal(expected_state, _this_state, "state should be Funding");
     }
 
     // test that RandomCoin contract can deploy an instance of RDCToken
@@ -99,6 +106,7 @@ contract TestRDCUnified {
     // idea: test if multiple deploy reverts (as it should -- after first, bool should prevent subsequent deploy)
 
     // test if random rates fall within the expected (rescaled) range
+    // N.B. this indirectly tests rescaleRate() as well
     function testRandomRate() public {
         uint _rand_rate = rc.randomRate();
         uint low = 50;
@@ -106,6 +114,48 @@ contract TestRDCUnified {
         
         Assert.isAtLeast(_rand_rate, low, "Random rate should be at least 50");
         Assert.isAtMost(_rand_rate, high, "Random rate should be at most 150");
+    }
+
+    // test that multiple random rates average within the expected (rescaled) range
+    function testMultipleRandomRate() public {
+        uint256 low = 50;
+        uint256 high = 150;
+        uint256[5] memory _rates;
+        for (uint i = 0; i < 5; i++) {
+            _rates[i] = rc.randomRate();
+            Assert.isAtLeast(_rates[i], low, "Random rate should be at least 50");
+            Assert.isAtMost(_rates[i], high, "Random rate should be at most 150");
+        }
+    }
+
+    // test pegIn - need to send at least 10 finney to move contract out of Funding state
+    function testPegIn() public {
+        address _add = address(this);
+        rc.pegIn(); // not sure how to attach eth value to this call
+        // this test will revert until I can figure this out
+        Assert.isAtLeast(rc.rdc().balanceOf(_add), 1, "pegIn should grant at least 1 RDC");
+    }
+
+    // once testPegIn() is working:
+    // new function to peg in multiple times and test that averageRate gets updated each time
+
+
+    // test pegOut
+
+
+    // test changePegInBase
+    // currently reverting though the math seems OK here..
+    function testChangePegInBase() public {
+        uint256 _new_base = 109 szabo;  // should pass
+        rc.changePegInBase(_new_base);
+        Assert.equal(_new_base, rc.minimumPegInBaseAmount(), "Peg in base should be 109 szabo");
+    }
+
+    // test changeBlockWaitTime
+    function testChangeBlockWaitTime() public {
+        uint256 _new_bwt = 5760 * 14 + 1000;  // should be well within bounds
+        rc.changeBlockWaitTime(_new_bwt);
+        Assert.equal(_new_bwt, rc.blockWaitTime(), "blockWaitTime should be equal to 5760 * 14 + 1000");
     }
 
     // Still need to test: PegIn(), PegOut(), updateAverageRate() [indirectly, or make public]

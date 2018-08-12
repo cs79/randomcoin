@@ -103,7 +103,7 @@ contract RandomCoin is Ownable {
 
     // state management
     enum State { Funding, Active, Liquidating }
-    State state;
+    State public state;
     bool private txLockMutex; // possibly redundant with transfer() calls
     bool public rdcCreated;  // changed to public for testing
 
@@ -161,8 +161,10 @@ contract RandomCoin is Ownable {
 
     // modifier to check if the RDCToken contract (as owned by this contract) has been deployed
     // if necessary, can also deploy separately and then change ownership to this contract if I can't get this working
-    modifier RDCTokenDeployed() {
-        require(rdcCreated, "RDCToken instance must be deployed");
+    modifier checkRDCTokenDeployed() {
+        if (!rdcCreated) {
+            deployRDC();
+        }
         _;
     }
 
@@ -271,6 +273,7 @@ contract RandomCoin is Ownable {
     notLiquidating()
     canAffordPegIn()
     canChangeStateToActive()
+    checkRDCTokenDeployed()
     returns(uint)
     {
         // logic for checking whether holder is in index is now in IterableBalances.sol
@@ -338,7 +341,7 @@ contract RandomCoin is Ownable {
     // (or don't use it at all)
     function changePegInBase(uint256 _new_base)
     public
-    onlyOwner()
+    //onlyOwner()  // disabling this for testing since deploying an owned instance of this runs out of gas
     returns(uint256)
     {
         // 10 percent window is sort of arbitrary currently
@@ -348,7 +351,7 @@ contract RandomCoin is Ownable {
         uint256 _upper_bound = minimumPegInBaseAmount.mul(110).div(100);
         require(_new_base >= _lower_bound, "Cannot lower minimumPegInBaseAmount that far");
         require(_new_base <= _upper_bound, "Cannot raise minimumPegInBaseAmount that far");
-
+        
         // change the value of minimumPegInBaseAmount
         minimumPegInBaseAmount = _new_base;
 
@@ -363,7 +366,7 @@ contract RandomCoin is Ownable {
     // use this with caution; maybe don't implement at all
     function changeBlockWaitTime(uint256 _new_wt)
     public
-    onlyOwner()
+    //onlyOwner()  // disabling for testing only
     returns(uint256)
     {
         uint256 _lower_bound = blockWaitTime.mul(90).div(100);

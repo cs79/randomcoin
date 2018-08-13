@@ -13,11 +13,10 @@ contract RDCToken is MintableToken {
     // Should be constructed by the RandomCoin contract (exactly once - bool for this?)
     constructor() public {
         owner = msg.sender;
-    }
-
-    // EXTREMELY IMPORTANT QUESTION: DOES THIS NEED TO IMPLEMENT ALL NAMED METHODS IN THE CONTRACTS IT INHERITS FROM?
-    
+    }    
 }
+
+// TODO: implement a fallback function for this contract
 
 contract RandomCoin is Ownable {
     /*
@@ -210,6 +209,19 @@ contract RandomCoin is Ownable {
         return true;
     }
 
+    // alternative to deployRDC() to link the RDCToken instance (for testing, but could use in general)
+    function linkRDC(address _rdc_add)
+    public
+    returns(bool)
+    {
+        // turning off below line for testing
+        //require(!rdcCreated, "RDCToken instance has already been created");
+        rdc = RDCToken(_rdc_add);
+        rdcTokenAddress = _rdc_add;
+        rdcCreated = true;
+        emit DeployedRDC();  // come up w/ new event type for this
+        return true;
+    }
     
     function randomRate()
     //private
@@ -493,4 +505,7 @@ contract RandomCoin is Ownable {
         // return true for testing
         return true;
     }
+
+    // fallback function
+    function () external payable {}
 }

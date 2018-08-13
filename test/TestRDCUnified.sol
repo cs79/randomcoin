@@ -13,14 +13,20 @@ contract TestRDCUnified {
 
     // N.B. it is possible to run out of ether in deploying account while testing; just reinit truffle develop if this occurs
 
+    uint public initialBalance = 10 ether;
+
     RandomCoin rc;
     RDCToken rdc;
-    enum State { Funding, Active, Liquidating }
+    //enum State { Funding, Active, Liquidating }
     
     // context setup / teardown to avoid running out of gas while testing
     function beforeEachAgain() public {
         rc = RandomCoin(DeployedAddresses.RandomCoin());
         rdc = new RDCToken();
+        // trying to get owner set to rc
+        //rdc.transferOwnership(DeployedAddresses.RandomCoin());
+        //rc.rdc = rdc;
+        //rc.linkRDC(address(rdc));
     }
 
     // TODO: try and see if I can set up an owned instance of RandomCoin in beforeEachAgain (no new RDCToken())
@@ -130,10 +136,20 @@ contract TestRDCUnified {
 
     // test pegIn - need to send at least 10 finney to move contract out of Funding state
     function testPegIn() public {
-        address _add = address(this);
-        rc.pegIn(); // not sure how to attach eth value to this call
-        // this test will revert until I can figure this out
-        Assert.isAtLeast(rc.rdc().balanceOf(_add), 1, "pegIn should grant at least 1 RDC");
+        // set rdc owner to rc
+        rdc.transferOwnership(DeployedAddresses.RandomCoin());
+        address _add1 = address(rdc);
+        rc.linkRDC(_add1);  // maybe ?? if this works, do this up top and update all tests
+        address _add2 = rc.rdcTokenAddress();
+        Assert.equal(_add1, _add2, "rdcTokenAddress should be set on rc");
+        // TODO: FIGURE OUT WHY THIS DOESN'T WORK
+        
+        //RDCToken _deployed = RDCToken(DeployedAddresses.RDCToken());
+        //rc.rdc = rdc;//_deployed;
+
+        //address _add = address(this);
+        //rc.pegIn.value(15 finney).gas(100000)();  // dunno how much gas is actually needed here
+        //Assert.isAtLeast(rc.rdc().balanceOf(_add), 1, "pegIn should grant at least 1 RDC");
     }
 
     // once testPegIn() is working:

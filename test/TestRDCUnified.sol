@@ -17,16 +17,19 @@ contract TestRDCUnified {
 
     RandomCoin rc;
     RDCToken rdc;
-    //enum State { Funding, Active, Liquidating }
     
     // context setup / teardown to avoid running out of gas while testing
     function beforeEachAgain() public {
         rc = RandomCoin(DeployedAddresses.RandomCoin());
         rdc = new RDCToken();
+        /*
         // trying to get owner set to rc
-        //rdc.transferOwnership(DeployedAddresses.RandomCoin());
-        //rc.rdc = rdc;
-        //rc.linkRDC(address(rdc));
+        // the below "works" but then breaks tests that do not expect these relationships
+        // could rewrite so that they do
+        // also kinda redundant to keep linking repeatedly; can we just deploy once and link once ?
+        rdc.transferOwnership(DeployedAddresses.RandomCoin());
+        rc.linkRDC(address(rdc));
+        */
     }
 
     // TODO: try and see if I can set up an owned instance of RandomCoin in beforeEachAgain (no new RDCToken())
@@ -66,6 +69,19 @@ contract TestRDCUnified {
         rdc.mint(_add, secondXfer);
 
         Assert.equal(expected, rdc.totalSupply(), "totalSupply should be 10000");
+    }
+
+    // test that RDCTokens are transferable
+    function testRDCTokenTransfer() public {
+        address _add1 = address(this);
+        address _add2 = DeployedAddresses.RDCToken();
+        
+        // mint to _add1, transfer to _add2
+        rdc.mint(_add1, 1000);
+        rdc.transfer(_add2, 500);
+
+        uint256 _expected = 500;
+        Assert.equal(_expected, rdc.balanceOf(_add2), "balance of _add2 should be 500");
     }
 
     // test if RDCToken can have ownership transferred to an instance of RandomCoin

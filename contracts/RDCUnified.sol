@@ -78,6 +78,7 @@ contract RandomCoin is Ownable {
     uint256 private haircut;
     uint256 public averageRate;
     uint256 private lastAvgRate;
+    // maybe make txCount public... queryable in JS even if private ?
     uint256 private txCount;  // use this + last rate to adjust averageRage
     uint256 public expectedRate;
     uint256 private halfWidth;

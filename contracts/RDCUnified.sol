@@ -275,15 +275,16 @@ contract RandomCoin is Ownable {
     private
     returns(uint)
     {
+        lastAvgRate = averageRate;
         uint _newAR;
         if (txCount == 0) {
             _newAR = _last_rate;
         }
         else {
-            // averageRage = ((lastAvgRate * txCount) + [new random rate]) / txCount + 1
+            // averageRate = ((lastAvgRate * txCount) + [new random rate]) / txCount + 1
             _newAR = (lastAvgRate.mul(txCount).add(_last_rate)).div(txCount.add(1));
         }
-        lastAvgRate = _newAR;
+        averageRate = _newAR;
         // then increment txCount
         txCount = txCount.add(1);
         return _newAR;

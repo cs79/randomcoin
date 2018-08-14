@@ -15,10 +15,18 @@ contract TestRDCUnified {
 
     uint public initialBalance = 10 ether;
 
+    uint public _lastFullAR;
+
+    RandomCoin rc_full;
     RandomCoin rc;
     RDCToken rdc;
     
     // context setup / teardown to avoid running out of gas while testing
+    function beforeAll() public {
+        rc_full = RandomCoin(DeployedAddresses.RandomCoin());
+        rc_full.deployRDC();
+    }
+
     function beforeEachAgain() public {
         rc = RandomCoin(DeployedAddresses.RandomCoin());
         rdc = new RDCToken();
@@ -120,9 +128,8 @@ contract TestRDCUnified {
 
     // test that RandomCoin contract can deploy an instance of RDCToken
     function testRDCDeployment() public {
-        rc.deployRDC();
         bool expected = true;
-        Assert.equal(expected, rc.rdcCreated(), "The deployed RandomCoin contract should own the RDCToken contract");
+        Assert.equal(expected, rc_full.rdcCreated(), "The deployed RandomCoin contract should own the RDCToken contract");
     }
 
     // idea: test if multiple deploy reverts (as it should -- after first, bool should prevent subsequent deploy)
@@ -167,29 +174,27 @@ contract TestRDCUnified {
     // new function to peg in multiple times and test that averageRate gets updated each time
     function testMultiplePegIn() public {
         // set rdc owner to rc
-        rdc.transferOwnership(DeployedAddresses.RandomCoin());
-        rc.linkRDC(address(rdc));
-
+        //rdc.transferOwnership(DeployedAddresses.RandomCoin());
+        //rc.linkRDC(address(rdc));
         // peg in a few times
         uint _lastAR;
-        for (uint i; i < 5; i++)
+        for (uint8 i; i < 5; i++)
         {
-            rc.pegIn.value(15 finney).gas(1000000)();
-            uint _curAR = rc.averageRate();
+            rc_full.pegIn.value(15 finney).gas(300000)();
+            uint _curAR = rc_full.averageRate();
             Assert.isAtLeast(_curAR, 1, "averageRate should not be 0");
             // check that averageRate changes during loop
             if (i > 0) {
                 // if these occur in same block, randomRate will be same ? not changing for whatever reason
-                //Assert.notEqual(_lastAR, _curAR, "averageRate should have been updated");
+                Assert.notEqual(_lastAR, _curAR, "averageRate should have been updated");
             }
             _lastAR = _curAR;
         }
-        
         // check latestRates after loop
         uint _expectValue = 2;
         uint _doNotExpectValue = 10;
-        Assert.isAtLeast(rc.latestRates(_expectValue), 1, "value should have been assigned to index 2");
-        Assert.equal(rc.latestRates(_doNotExpectValue), 0, "value should not have been assigned to index 10");
+        Assert.isAtLeast(rc_full.latestRates(_expectValue), 1, "value should have been assigned to index 2");
+        Assert.equal(rc_full.latestRates(_doNotExpectValue), 0, "value should not have been assigned to index 10");
     }
 
 

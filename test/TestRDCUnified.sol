@@ -158,18 +158,39 @@ contract TestRDCUnified {
         rc.linkRDC(_add1);  // maybe ?? if this works, do this up top and update all tests
         address _add2 = rc.rdcTokenAddress();
         Assert.equal(_add1, _add2, "rdcTokenAddress should be set on rc");
-        // TODO: FIGURE OUT WHY THIS DOESN'T WORK
-        
-        //RDCToken _deployed = RDCToken(DeployedAddresses.RDCToken());
-        //rc.rdc = rdc;//_deployed;
-
-        //address _add = address(this);
-        //rc.pegIn.value(15 finney).gas(100000)();  // dunno how much gas is actually needed here
-        //Assert.isAtLeast(rc.rdc().balanceOf(_add), 1, "pegIn should grant at least 1 RDC");
+        // test the pegIn() transaction functionality
+        rc.pegIn.value(15 finney).gas(1000000)();  // actual gas cost is something like 175,000 it appears
+        Assert.isAtLeast(rc.rdc().balanceOf(address(this)), 1, "pegIn should grant at least 1 RDC");
     }
 
     // once testPegIn() is working:
     // new function to peg in multiple times and test that averageRate gets updated each time
+    function testMultiplePegIn() public {
+        // set rdc owner to rc
+        rdc.transferOwnership(DeployedAddresses.RandomCoin());
+        rc.linkRDC(address(rdc));
+
+        // peg in a few times
+        uint _lastAR;
+        for (uint i; i < 5; i++)
+        {
+            rc.pegIn.value(15 finney).gas(1000000)();
+            uint _curAR = rc.averageRate();
+            Assert.isAtLeast(_curAR, 1, "averageRate should not be 0");
+            // check that averageRate changes during loop
+            if (i > 0) {
+                // if these occur in same block, randomRate will be same ? not changing for whatever reason
+                //Assert.notEqual(_lastAR, _curAR, "averageRate should have been updated");
+            }
+            _lastAR = _curAR;
+        }
+        
+        // check latestRates after loop
+        uint _expectValue = 2;
+        uint _doNotExpectValue = 10;
+        Assert.isAtLeast(rc.latestRates(_expectValue), 1, "value should have been assigned to index 2");
+        Assert.equal(rc.latestRates(_doNotExpectValue), 0, "value should not have been assigned to index 10");
+    }
 
 
     // test pegOut

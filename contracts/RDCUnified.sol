@@ -89,6 +89,12 @@ contract RandomCoin is Ownable {
     uint256 public minTxToActivate;
     uint256 public minBalanceToActivate;
 
+    // for tracking recent transactions in a frontend UI / during testing
+    uint256[16] public latestRates;
+    uint8 private maxRateIndex;
+    uint8 private currentRateIndex;
+    bool private rateArrayFull;
+
     // to be deployed after instantiating this contract
     // should other functions force this (like PegIn()) if it doesn't exist yet ?
     RDCToken public rdc;
@@ -185,6 +191,9 @@ contract RandomCoin is Ownable {
         blockWaitTime = 5760 * 14;  // 2 weeks seems reasonable I guess 
         minTxToActivate = 10;
         minBalanceToActivate = 10 finney;
+        maxRateIndex = 15;
+        currentRateIndex = 0;
+        rateArrayFull = false;
         /*
         If I do not instantiate this in the constructor, tests (as of 8/8/18) will run and pass
         solution may be to instantiate it after the fact, but I don't know how to do that exactly
@@ -277,8 +286,40 @@ contract RandomCoin is Ownable {
         lastAvgRate = _newAR;
         // then increment txCount
         txCount = txCount.add(1);
+        return _newAR;
     }
 
+    // function to update the storage array of latest rates
+    // should be called by both pegIn() and pegOut()
+    function updateRateStorage(uint256 _rate)
+    private
+    returns(uint256)
+    {
+        uint8 _index_used;
+        if (!rateArrayFull) {
+            // just insert the rate in the latest slot
+            latestRates[currentRateIndex] = _rate;
+            // update the relevant metadata
+            _index_used = currentRateIndex;
+            currentRateIndex += 1;
+            // guarantees safety for the increment operation - will not overflow as uint8 can store values > 15
+            if (currentRateIndex == maxRateIndex) {
+                rateArrayFull = true;
+            }
+        } else {
+            _index_used = maxRateIndex;
+            uint256[16] memory _temp_rates;
+            // shift old rates one index to the left
+            for (uint8 i = 1; i <= maxRateIndex; i++) {
+                _temp_rates[i - 1] = latestRates[i];
+            }
+            // insert the new rate in the latest slot of _temp_rates
+            _temp_rates[maxRateIndex] = _rate;
+            // reassign latestRates to the updated temp array
+            latestRates = _temp_rates;
+        }
+        return latestRates[_index_used];
+    }
 
     function pegIn()
     public
@@ -299,6 +340,8 @@ contract RandomCoin is Ownable {
         haircut = haircut.add(minimumPegInBaseAmount);
         // update the value of averageRate
         updateAverageRate(_rndrate);
+        // update the latestRates storage array
+        updateRateStorage(_rndrate);
         // emit the PeggedIn event
         emit PeggedIn(_add, _rndamt);
         // return the amount received for peg-in
@@ -338,7 +381,9 @@ contract RandomCoin is Ownable {
         
         // update the value of averageRate
         updateAverageRate(_rndrate);
-        
+        // update the latestRates storage array
+        updateRateStorage(_rndrate);
+
         // release the mutex after external call
         txLockMutex = false;
         

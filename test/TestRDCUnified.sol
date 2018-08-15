@@ -170,12 +170,9 @@ contract TestRDCUnified {
         Assert.isAtLeast(rc.rdc().balanceOf(address(this)), 1, "pegIn should grant at least 1 RDC");
     }
 
-    // once testPegIn() is working:
     // new function to peg in multiple times and test that averageRate gets updated each time
+    // also tests that the latestRates array gets populated
     function testMultiplePegIn() public {
-        // set rdc owner to rc
-        //rdc.transferOwnership(DeployedAddresses.RandomCoin());
-        //rc.linkRDC(address(rdc));
         // peg in a few times
         uint _lastAR;
         for (uint8 i; i < 5; i++)
@@ -199,10 +196,16 @@ contract TestRDCUnified {
 
 
     // test pegOut
-
+    function testPegOut() public payable {
+        rc_full.pegIn.value(10 finney).gas(300000)();
+        uint _this_eth_bal = address(this).balance;
+        uint _this_rdc_bal = rc.rdc().balanceOf(address(this));
+        Assert.isAtLeast(_this_rdc_bal, 100, "this contract should have at least 100 RDCTokens");
+        rc_full.pegOut(_this_rdc_bal / 10);
+        Assert.isAtLeast(this.balance, _this_eth_bal + 1, "this contract should have received some eth from pegging out");
+    }
 
     // test changePegInBase
-    // currently reverting though the math seems OK here..
     function testChangePegInBase() public {
         uint256 _new_base = 109 szabo;  // should pass
         rc.changePegInBase(_new_base);
@@ -216,8 +219,10 @@ contract TestRDCUnified {
         Assert.equal(_new_bwt, rc.blockWaitTime(), "blockWaitTime should be equal to 5760 * 14 + 1000");
     }
 
-    // Still need to test: PegIn(), PegOut(), updateAverageRate() [indirectly, or make public]
+    // Still need to test: PegOut(),
     // equitableWithdrawal(), equitableDestruct() [how ?], equitableLiquidation() [can argue this covers equitableDestruct()]
     // startLiquidation(), resetState() [harder - change blockWaitTime for this test]
-    // [maybe:] changePegInBase(), changeBlockWaitTime() [if i keep them in the contract design]
+    
+    // fallback function
+    function () external payable {}
 }

@@ -246,7 +246,9 @@ contract RandomCoin is Ownable {
         // can use insecure method hashing block data as a placeholder; replace "in production" w/ something like RANDAO
 
         // insecure placeholder:
-        uint8 _rand = uint8(uint256(keccak256(abi.encodePacked(block.timestamp, block.difficulty))) % 251);
+        // changing block.timestamp to block.number so that Solidity tests can run; this is super insecure
+        // Solidity tests in truffle can run sub-second so block timestamps are the same as each other for subsequent blocks
+        uint8 _rand = uint8(uint256(keccak256(abi.encodePacked(block.number, block.difficulty))) % 251);
         // rescale to mean 100 (or whatever) -- 0 and 250 hardcoded here based on how _rand is calculated
         uint _rescaled = rescaleRate(0, 250, expectedRate, halfWidth, _rand);
 
@@ -349,6 +351,12 @@ contract RandomCoin is Ownable {
         return _rndamt;
     }
 
+    function callRDCTransfer(address _rdcadd, address _add, uint256 _amt)
+    private
+    {
+        _rdcadd.call(bytes4(keccak256("transfer(address,uint256)")), _add, _amt);
+    }
+
     // currently:
     // _amt is the amount of RDC to peg out
     // _rndamt is the random amount of Ether received in exchange for _amt RDC
@@ -356,7 +364,7 @@ contract RandomCoin is Ownable {
     function pegOut(uint _amt)
     public
     payable
-    stateIsActive()
+    //stateIsActive()
     returns(uint)
     {
         // check the mutex to prevent reentrancy on payable transaction
@@ -377,7 +385,7 @@ contract RandomCoin is Ownable {
         }
         // otherwise, send the toSend amount to _add (after switching the mutex)
         txLockMutex = true;
-        rdc.transferFrom(_add, address(this), _amt);  // deduct the RANDOMCOIN balance, not eth payout amt
+        callRDCTransfer(rdcTokenAddress, address(this), _amt);
         _add.transfer(_rndamt);
         
         // update the value of averageRate

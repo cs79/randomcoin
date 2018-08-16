@@ -1,84 +1,20 @@
 pragma solidity ^0.4.23;
 
-// try to put both the RDCToken and RandomCoin functionality into this file
-// can keep as separate contracts; just need to ensure they're actually together
+// attempt at a fully unified token with a bunch of extras
 
-//import "./MintableToken.sol";  // changed to copy in this directory rather than openzeppelin dir
 import "../installed_contracts/zeppelin/contracts/token/MintableToken.sol";
 
-contract RDCToken is MintableToken {
-    string public constant name = "RDCToken";
-    string public constant symbol = "RDC";
-
-    // Should be constructed by the RandomCoin contract (exactly once - bool for this?)
-    constructor() public {
-        owner = msg.sender;
-    }    
-}
-
-// TODO: implement a fallback function for this contract
-
-contract RandomCoin is Ownable {
-    /*
-
-    State / storage variables:
-    --------------------------
-    availablePayout         : should be set to CURRENT BALANCE of eth at this contract (minus some % to cover fees?) when liquidation occurs
-    haircut                 : effective fee on peg-in to help maintain the peg; could make this resettable by owner I guess via minimumPegInBaseAmount
-    averageRate             : should have EV of 1 (or 100; index level)
-    lastAvgRate             : used to recalculate averageRate as transactions occur
-    txCount                 : used to recalculate averageRate as transactions occur
-    expectedRate            : hardcode this as a point of comparison for averageRate
-    halfWidth               : half interval around expectedRate to get random rates from
-    liquidationBlockNumber  : block height at liquidation event
-    blockWaitTime           : blocks to wait after liquidation before state reset is allowed
-    minimumPegInBaseAmount  : effective liquidation haircut to help defend the peg
-    minimumPegInMultiplier  : multiplier on top of minimumPegInBaseAmount to set the minimum value of a peg-in transaction
-    rdct                    : factory to create a new (single) instance of the RandomCoinToken contract
-    rdc                     : RandomCoinToken contract instance
-    State                   : enum of states this contract can be in
-    state                   : contract's current State value
-    txLockMutex             : transaction locking mutex to prevent reentrancy
-    rdcCreated              : boolean to track whether the contract has ever instantiated a RDC object from the factory
-
-    Events:
-    -------
-    PeggedIn                        :
-    PeggedOut                       :
-    TriggeredEquitableLiquidation   :
-    TriggeredEquitableDestruct      :
-    StateChangeToFunding            :
-    StateChangeToActive             :
-    StateChangeToLiquidating        :
-    MadeEquitableWithdrawal         : 
-    FullContractReset               :
-
-
-    Modifiers:
-    ----------
-    notLiquidating                  :
-    stateIsActive                   :
-    stateIsLiquidating              :
-    blockWaitTimeHasElapsed         :
-    canAffordPegIn                  : 
-
-    Notes:
-    ------
-    - averageRate (and all math, for that matter) needs to be managed without floats for now
-    - averageRate should ideally create (somewhere) a record of its past values, for frontend TS graphs
-    - *** need to consider how holders of rdc from prior "round" of the life of this contract affects its viability
-    - use (rdc.balanceOf(add) / rdc.totalSupply) * availablePayout to assign equitable balances to holders
-    - txLockMutex may be better replaced by something in an OpenZeppelin library
-
-    */
+contract RDC is MintableToken {
 
     using SafeMath for uint256;
-    
-    uint256 private availablePayout;
-    uint256 private haircut;
+
+    // STATE VARIABLES
+    //----------------
+
+    uint256 public availablePayout;  // made public for testing
+    uint256 public haircut;  // made public for testing
     uint256 public averageRate;
     uint256 private lastAvgRate;
-    // maybe make txCount public... queryable in JS even if private ?
     uint256 private txCount;  // use this + last rate to adjust averageRage
     uint256 public expectedRate;
     uint256 private halfWidth;
@@ -95,26 +31,15 @@ contract RandomCoin is Ownable {
     uint8 private currentRateIndex;
     bool private rateArrayFull;
 
-    // to be deployed after instantiating this contract
-    // should other functions force this (like PegIn()) if it doesn't exist yet ?
-    RDCToken public rdc;
-    // is the below redundant with address(address(this).rdc) ?
-    address public rdcTokenAddress;  // for users to trade tokens with each other
-
-    // harder to recycle state of this contract and start a "new round"
-    // I guess you could let people hold on to their RNDC from previous rounds, and if they missed a cash-out state they could peg out on next round
-    // *** but then how to calculate "equitable payouts" ? equitable to "last round", or equitable to OVERALL RNDC outstanding ?
-    // from mechanism design perspective, an ERC20 token may be better
-    // (disincentivizes rapid peg-in / peg-out to try to force a liquidation after some disproportionate peg-outs)
-
     // state management
     enum State { Funding, Active, Liquidating }
     State public state;
     bool private txLockMutex; // possibly redundant with transfer() calls
-    bool public rdcCreated;  // changed to public for testing
 
-    // declare events
-    event DeployedRDC();
+
+    // EVENTS
+    //-------
+
     event PeggedIn(address _add, uint256 _amt);
     event PeggedOut(address _add, uint256 _amt);
     event ChangedPegInBase(uint256 _amt);
@@ -127,7 +52,10 @@ contract RandomCoin is Ownable {
     event MadeEquitableWithdrawal(address _add, uint _amt);
     event FullContractReset(address _add);  // maybe; kind of redundant w/ StateChangeToFunding
 
-    // declare modifiers
+
+    // MODIFIERS
+    //----------
+
     modifier notLiquidating() {
         require(state != State.Liquidating, "State must NOT be Liquidating");
         _;
@@ -165,100 +93,48 @@ contract RandomCoin is Ownable {
         }
     }
 
-    // modifier to check if the RDCToken contract (as owned by this contract) has been deployed
-    // if necessary, can also deploy separately and then change ownership to this contract if I can't get this working
-    modifier checkRDCTokenDeployed() {
-        if (!rdcCreated) {
-            deployRDC();
-        }
-        _;
-    }
 
-    // declare constructor + other functions
+    // CONSTRUCTOR
+    //------------
+
     constructor()
     public
     {
         owner = msg.sender;
         minimumPegInBaseAmount = 100 szabo; // ~ 5 cents
         minimumPegInMultiplier = 10;
-        availablePayout = 0;  // keep at 0 since msg.value when constructed may be higher than the actual contract balance after construction
-        haircut = 0;  // this is what should get incremented when accounts peg in
         averageRate = 100;  // since there are no floats yet, index to 100 (or higher ?) instead of 1
-        lastAvgRate = 0;
-        txCount = 0;
         expectedRate = 100;  // think about this... maybe higher for better decimal approximation ?
         halfWidth = 50;
-        blockWaitTime = 5760 * 14;  // 2 weeks seems reasonable I guess 
+        blockWaitTime = 10; //changed to 10 for testing //5760 * 14;  // 2 weeks seems reasonable I guess 
         minTxToActivate = 10;
         minBalanceToActivate = 10 finney;
         maxRateIndex = 15;
-        currentRateIndex = 0;
         rateArrayFull = false;
-        /*
-        If I do not instantiate this in the constructor, tests (as of 8/8/18) will run and pass
-        solution may be to instantiate it after the fact, but I don't know how to do that exactly
-        try doing it without a factory first, but maybe factory would be better if i can't figure that out
-
-        rdc = new RDCToken();*/  // seeing if i can avoid gas constraints with smaller constructor
         state = State.Funding;
         txLockMutex = false;
-        rdcCreated = false;  // this may be a better pattern actually - have a modifier that locks certain functionality when this is false
     }
 
-    // testing this out for now
-    function deployRDC()
-    public
-    //onlyOwner()  // turning this off for testing; can also get away without using this since the ownership of rdc will be this, and limited to 1
-    returns(bool)
-    {
-        require(!rdcCreated, "RDCToken instance has already been created");
-        rdc = new RDCToken();
-        rdcTokenAddress = address(rdc);
-        rdcCreated = true;
-        emit DeployedRDC();
-        return true;
-    }
 
-    // alternative to deployRDC() to link the RDCToken instance (for testing, but could use in general)
-    function linkRDC(address _rdc_add)
-    public
-    returns(bool)
-    {
-        // turning off below line for testing
-        //require(!rdcCreated, "RDCToken instance has already been created");
-        rdc = RDCToken(_rdc_add);
-        rdcTokenAddress = _rdc_add;
-        rdcCreated = true;
-        emit DeployedRDC();  // come up w/ new event type for this
-        return true;
-    }
-    
+    // FUNCTIONS
+    //----------
+
+    // generate a random exchange rate for RDC <--> ETH
     function randomRate()
-    //private
-    public // for testing
+    public //private - made public for testing only
     view
     returns(uint)
     {
-        // the most important piece -- will be called to generate the rate when pegIn() or pegOut() is called
-        // needs to have an EV of 100 (or whatever we set the expected rate to be)
-        // no idea what math / random libraries are already available in solidity... hopefully something I can work with for this 
-        // just assume that RANDAO is up and running for the time being; tackle random generation last ?
-        // can use insecure method hashing block data as a placeholder; replace "in production" w/ something like RANDAO
-
-        // insecure placeholder:
+        // insecure placeholder; use something like RANDAO for a "real" implementation:
         // changing block.timestamp to block.number so that Solidity tests can run; this is super insecure
         // Solidity tests in truffle can run sub-second so block timestamps are the same as each other for subsequent blocks
         uint8 _rand = uint8(uint256(keccak256(abi.encodePacked(block.number, block.difficulty))) % 251);
         // rescale to mean 100 (or whatever) -- 0 and 250 hardcoded here based on how _rand is calculated
         uint _rescaled = rescaleRate(0, 250, expectedRate, halfWidth, _rand);
-
-        // cannot be zero:
-        if (_rescaled == 0) {
-            _rescaled = 1;
-        }
         return _rescaled;
     }
 
+    // rescale rate to fit within a new range (expectedRate +/- halfWidth)
     function rescaleRate(uint _min, uint _max, uint _ev, uint _buf, uint _x)
     private
     view
@@ -273,6 +149,7 @@ contract RandomCoin is Ownable {
         return ((((_b.sub(_a)).mul((_x.sub(_min)))).div((_max.sub(_min)))).add(_a));
     }
 
+    // keep track of the running average of random rates
     function updateAverageRate(uint _last_rate)
     private
     returns(uint)
@@ -292,8 +169,7 @@ contract RandomCoin is Ownable {
         return _newAR;
     }
 
-    // function to update the storage array of latest rates
-    // should be called by both pegIn() and pegOut()
+    // update the storage array of latest rates; should be called by both pegIn() and pegOut()
     function updateRateStorage(uint256 _rate)
     private
     returns(uint256)
@@ -324,43 +200,33 @@ contract RandomCoin is Ownable {
         return latestRates[_index_used];
     }
 
+    // peg in from ETH to RDC
     function pegIn()
     public
     payable
     notLiquidating()
     canAffordPegIn()
     canChangeStateToActive()
-    checkRDCTokenDeployed()
-    returns(uint)
+    returns(uint256)
     {
-        // logic for checking whether holder is in index is now in IterableBalances.sol
-        // just add the balance
         address _add = msg.sender;
-        uint _rndrate = randomRate();
-        uint _rndamt = msg.value.mul(_rndrate);  // can I use SafeMath here ? need to recast randomRate return variable as uint256?
-        rdc.mint(_add, _rndamt);  // add the RANDOMCOIN balance, not eth sent amount
+        // generate random rate for peg-in transaction
+        uint256 _rndrate = randomRate();
+        uint256 _rdc_amt = msg.value.mul(_rndrate);
+        // mint new RDC in exchange for ETH at the calculated rate
+        mint(_add, _rdc_amt);
         // capture the haircut to deduct from availablePayout
         haircut = haircut.add(minimumPegInBaseAmount);
-        // update the value of averageRate
+        // update the values of averageRate and the latestRates storage array
         updateAverageRate(_rndrate);
-        // update the latestRates storage array
         updateRateStorage(_rndrate);
         // emit the PeggedIn event
-        emit PeggedIn(_add, _rndamt);
+        emit PeggedIn(_add, _rdc_amt);
         // return the amount received for peg-in
-        return _rndamt;
+        return _rdc_amt;
     }
 
-    function callRDCTransfer(address _rdcadd, address _add, uint256 _amt)
-    private
-    {
-        _rdcadd.call(bytes4(keccak256("transfer(address,uint256)")), _add, _amt);
-    }
-
-    // currently:
-    // _amt is the amount of RDC to peg out
-    // _rndamt is the random amount of Ether received in exchange for _amt RDC
-    // maybe rename this to avoid confusing myself (_eth_amt, _rdc_amt) here and elsewhere
+    // peg out from RDC to ETH
     function pegOut(uint _amt)
     public
     payable
@@ -369,36 +235,30 @@ contract RandomCoin is Ownable {
     {
         // check the mutex to prevent reentrancy on payable transaction
         require(!txLockMutex, "txLockMutex must be unlocked");
-        
         // check that account has sufficient balance
         address _add = msg.sender;
-        require(rdc.balanceOf(_add) >= _amt, "Insufficient balance to peg out");
-
+        require(balanceOf(_add) >= _amt, "Insufficient balance to peg out");
         // calculate amount of eth to send (DOES THIS WORK WITHOUT FLOATS ??? MIGHT NEED TO RECONFIGURE MATH FORMULA HERE)
         uint _rndrate = randomRate();
-        uint _rndamt = _amt.div(_rndrate); // maybe rename - _rndamt here is a "random amount of eth"
-
+        uint _eth_amt = _amt.div(_rndrate);
         // if contract would be drained by peg out, allow equitable withdrawal of whatever is left
-        if (_rndamt > address(this).balance) {
+        if (_eth_amt > address(this).balance) {
             equitableDestruct();
-            // do I need to call anything else here to ensure no weirdness happens after calling equitableDestruct?
         }
         // otherwise, send the toSend amount to _add (after switching the mutex)
         txLockMutex = true;
-        callRDCTransfer(rdcTokenAddress, address(this), _amt);
-        _add.transfer(_rndamt);
-        
-        // update the value of averageRate
+        //transfer(address(this), _amt); // hopefully this works now...
+        // just manipulate balances directly
+        balances[_add] = balances[_add].sub(_amt);
+        balances[address(this)] = balances[address(this)].add(_amt);
+        emit Transfer(msg.sender, address(this), _amt);        
+        _add.transfer(_eth_amt);
+        // update the values of averageRate and the latestRates storage array
         updateAverageRate(_rndrate);
-        // update the latestRates storage array
         updateRateStorage(_rndrate);
-
         // release the mutex after external call
         txLockMutex = false;
-        
-        // emit the PeggedOut event
         emit PeggedOut(_add, _amt);
-        
         // return the amount pegged out
         return _amt;
     }
@@ -451,33 +311,7 @@ contract RandomCoin is Ownable {
         return _new_wt;
     }
 
-    function equitableWithdrawal()  // maybe rename this...
-    public
-    payable
-    stateIsLiquidating()
-    returns(uint)
-    {
-        // check the mutex for payable function
-        require(!txLockMutex, "txLockMutex must be unlocked");
-        address _add = msg.sender;
-        // calculate payout but without this contract claiming its share (?)
-        // e.g. instead of using rdc.totalSupply() as the denominator, use (rdc.totalSupply - rdc.balanceOf(address(this)))
-        // this would alleviate the implicit extra haircut to everyone as prior holders failed to cash out their equitable share during earlier liquidiations
-        uint _this_bal = rdc.balanceOf(address(this));
-        uint _payout = (rdc.balanceOf(_add).div(rdc.totalSupply().sub(_this_bal))).mul(availablePayout);
-        // set the lock mutex before transfer
-        txLockMutex = true;
-        _add.transfer(_payout);
-        // release the lock mutex after transfer
-        txLockMutex = false;
-        // may need to handle the case where the last person to withdraw cannot do so because fees have drained what would have been proportional shares initially
-        
-        // emit the relevant event
-        emit MadeEquitableWithdrawal(_add, _payout);
-        // return the amount paid out
-        return _payout;
-    }
-
+    // automatic "fair self-destruct" if peg breaks
     function equitableDestruct()
     private
     notLiquidating()
@@ -487,14 +321,13 @@ contract RandomCoin is Ownable {
         startLiquidation();
         // probably need some sort of "startCountdown()" function to get called here which allows for withdrawal within a particular window
         // (window also should then be a state variable -- maybe this can be changed by owner, but ONLY within certain [reasonable] limits)
-
         // emit relevant events
         emit TriggeredEquitableDestruct();
-        
         // return true for testing
         return true;
     }
 
+    // owner-forced "fair self-destruct"
     function equitableLiquidation()
     public
     notLiquidating()
@@ -503,10 +336,8 @@ contract RandomCoin is Ownable {
     {
         // set state to Liquidating
         startLiquidation();
-
         // emit relevant events
         emit TriggeredEquitableLiquidation(msg.sender);
-        
         // return true for testing
         return true;
     }
@@ -534,12 +365,39 @@ contract RandomCoin is Ownable {
         return true;
     }
 
+    // "claim fair payout" after the peg has broken
+    function equitableWithdrawal()  // maybe rename this...
+    public
+    payable
+    stateIsLiquidating()
+    returns(uint)
+    {
+        // check the mutex for payable function
+        require(!txLockMutex, "txLockMutex must be unlocked");
+        address _add = msg.sender;
+        // calculate payout but without this contract claiming its share (?)
+        // e.g. instead of using rdc.totalSupply() as the denominator, use (rdc.totalSupply - rdc.balanceOf(address(this)))
+        // this would alleviate the implicit extra haircut to everyone as prior holders failed to cash out their equitable share during earlier liquidiations
+        uint _this_bal = balanceOf(address(this));
+        uint _payout = (balanceOf(_add).div(totalSupply.sub(_this_bal))).mul(availablePayout);
+        // set the lock mutex before transfer
+        txLockMutex = true;
+        _add.transfer(_payout);
+        // release the lock mutex after transfer
+        txLockMutex = false;
+        // may need to handle the case where the last person to withdraw cannot do so because fees have drained what would have been proportional shares initially
+        
+        // emit the relevant event
+        emit MadeEquitableWithdrawal(_add, _payout);
+        // return the amount paid out
+        return _payout;
+    }
+
     // IDEA: owner can reset state, but ONLY after some window of time has passed allowing people enough time to withdraw (e.g. 2 weeks or something)
     function resetState()
     public
     onlyOwner()
-    //stateIsLiquidating()  // redundant w/ blockWaitTimeHasElapsed()
-    blockWaitTimeHasElapsed()
+    blockWaitTimeHasElapsed()  //disabling for testing as there is no good way to advance block time in Solidity tests :\
     returns(bool)
     {
         // ALL relevant variables need to be handled here - check constructor / all state vars
@@ -549,7 +407,7 @@ contract RandomCoin is Ownable {
         lastAvgRate = 0;
         txCount = 0;
         // if using rdc instead of rdcBalances, should just check that we have, in fact, created an instance (should always be true)
-        require(rdcCreated, "No RDCToken instance has been created");
+        //require(rdcCreated, "No RDCToken instance has been created");
         state = State.Funding;
         txLockMutex = false;  // hopefully redundant
 
@@ -563,4 +421,5 @@ contract RandomCoin is Ownable {
 
     // fallback function
     function () external payable {}
+
 }

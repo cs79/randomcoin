@@ -3,8 +3,9 @@ pragma solidity ^0.4.23;
 // attempt at a fully unified token with a bunch of extras
 
 import "../installed_contracts/zeppelin/contracts/token/MintableToken.sol";
+import "../installed_contracts/zeppelin/contracts/token/BurnableToken.sol";
 
-contract RDC is MintableToken {
+contract RDC is MintableToken, BurnableToken {
 
     using SafeMath for uint256;
 
@@ -49,7 +50,7 @@ contract RDC is MintableToken {
     event StateChangeToFunding();
     event StateChangeToActive();
     event StateChangeToLiquidating();
-    event MadeEquitableWithdrawal(address _add, uint _amt);
+    event MadeEquitableCashout(address _add, uint _amt);
     event FullContractReset(address _add);  // maybe; kind of redundant w/ StateChangeToFunding
 
 
@@ -230,7 +231,7 @@ contract RDC is MintableToken {
     function pegOut(uint _amt)
     public
     payable
-    //stateIsActive()
+    stateIsActive()
     returns(uint)
     {
         // check the mutex to prevent reentrancy on payable transaction
@@ -247,11 +248,8 @@ contract RDC is MintableToken {
         }
         // otherwise, send the toSend amount to _add (after switching the mutex)
         txLockMutex = true;
-        //transfer(address(this), _amt); // hopefully this works now...
-        // just manipulate balances directly
-        balances[_add] = balances[_add].sub(_amt);
-        balances[address(this)] = balances[address(this)].add(_amt);
-        emit Transfer(msg.sender, address(this), _amt);        
+        // burn the pegged-out RDC amount, then send ETH in exchange
+        burn(_amt);
         _add.transfer(_eth_amt);
         // update the values of averageRate and the latestRates storage array
         updateAverageRate(_rndrate);
@@ -268,7 +266,7 @@ contract RDC is MintableToken {
     // (or don't use it at all)
     function changePegInBase(uint256 _new_base)
     public
-    //onlyOwner()  // disabling this for testing since deploying an owned instance of this runs out of gas
+    onlyOwner()
     returns(uint256)
     {
         // 10 percent window is sort of arbitrary currently
@@ -293,7 +291,7 @@ contract RDC is MintableToken {
     // use this with caution; maybe don't implement at all
     function changeBlockWaitTime(uint256 _new_wt)
     public
-    //onlyOwner()  // disabling for testing only
+    onlyOwner()
     returns(uint256)
     {
         uint256 _lower_bound = blockWaitTime.mul(90).div(100);
@@ -355,6 +353,9 @@ contract RDC is MintableToken {
         // set availablePayout (minus the haircut accumulated so far via pegIn transactions)
         availablePayout = address(this).balance.sub(haircut);
 
+        // pause minting during liquidation s.t. totalSupply is stable for calculating fair payouts
+        mintingFinished = true;
+
         state = State.Liquidating;
         emit StateChangeToLiquidating();
 
@@ -366,7 +367,7 @@ contract RDC is MintableToken {
     }
 
     // "claim fair payout" after the peg has broken
-    function equitableWithdrawal()  // maybe rename this...
+    function equitableCashout()
     public
     payable
     stateIsLiquidating()
@@ -375,25 +376,28 @@ contract RDC is MintableToken {
         // check the mutex for payable function
         require(!txLockMutex, "txLockMutex must be unlocked");
         address _add = msg.sender;
-        // calculate payout but without this contract claiming its share (?)
-        // e.g. instead of using rdc.totalSupply() as the denominator, use (rdc.totalSupply - rdc.balanceOf(address(this)))
-        // this would alleviate the implicit extra haircut to everyone as prior holders failed to cash out their equitable share during earlier liquidiations
-        uint _this_bal = balanceOf(address(this));
-        uint _payout = (balanceOf(_add).div(totalSupply.sub(_this_bal))).mul(availablePayout);
+        uint256 _RDCToCashOut = balanceOf(_add);
+        require(_RDCToCashOut > 0, "Nothing to cash out");
+        // calculate payout based on ratio of _RDCToCashOut to totalSupply, multiplied by availablePayout
+        uint256 _payout = _RDCToCashOut.mul(availablePayout).div(totalSupply);
         // set the lock mutex before transfer
         txLockMutex = true;
+        // cash out the entire RDC balance of the sender to this contract
+        balances[_add] = balances[_add].sub(_RDCToCashOut);
+        balances[address(this)] = balances[address(this)].add(_RDCToCashOut);
         _add.transfer(_payout);
         // release the lock mutex after transfer
         txLockMutex = false;
         // may need to handle the case where the last person to withdraw cannot do so because fees have drained what would have been proportional shares initially
         
         // emit the relevant event
-        emit MadeEquitableWithdrawal(_add, _payout);
+        emit MadeEquitableCashout(_add, _payout);
         // return the amount paid out
         return _payout;
     }
 
     // IDEA: owner can reset state, but ONLY after some window of time has passed allowing people enough time to withdraw (e.g. 2 weeks or something)
+    // TODO: VALIDATE THAT THESE THINGS STILL MAKE SENSE TO RESET GIVEN THAT THIS IS A PERPETUAL RDC CONTRACT NOW
     function resetState()
     public
     onlyOwner()
@@ -406,11 +410,12 @@ contract RDC is MintableToken {
         averageRate = expectedRate;  // maybe ? or shoud we track this over longer horizons?
         lastAvgRate = 0;
         txCount = 0;
-        // if using rdc instead of rdcBalances, should just check that we have, in fact, created an instance (should always be true)
-        //require(rdcCreated, "No RDCToken instance has been created");
         state = State.Funding;
         txLockMutex = false;  // hopefully redundant
-
+        
+        // allow minting again
+        mintingFinished = false;
+        
         // emit relevant event(s)
         emit FullContractReset(msg.sender);
         emit StateChangeToFunding();

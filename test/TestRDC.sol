@@ -138,8 +138,7 @@ contract TestRDC {
         Assert.isAtLeast(_this_rdc_bal, 100, "this contract should have at least 100 RDCTokens");
         rdc.pegOut(_this_rdc_bal / 10);
         Assert.isAtLeast(this.balance, _this_eth_bal + 1, "this contract should have received some eth from pegging out");
-        Assert.isAtMost(rdc.balanceOf(this), _this_rdc_bal - 1, "this contract should have lost some RDCTokens");
-        Assert.isAtLeast(rdc.balanceOf(address(rdc)), 1, "the RDC contract should have received some RDCTokens");
+        Assert.equal(rdc.balanceOf(this), _this_rdc_bal - (_this_rdc_bal / 10), "this contract should have lost 1/10th of its RDCTokens");
     }
 
     // test changePegInBase
@@ -165,6 +164,15 @@ contract TestRDC {
         Assert.notEqual(rdc.liquidationBlockNumber(), 0, "liquidationBlockNumber should have been set");
         Assert.notEqual(rdc.availablePayout(), 0, "availablePayout should habe been set");
         Assert.equal(address(rdc).balance - rdc.haircut(), rdc.availablePayout(), "availablePayout should have been haircut");
+    }
+
+    // test equitableCashout
+    function testEquitableCashout() public payable {
+        uint256 _expected_rdc_bal = 0;
+        uint256 _this_eth_bal = address(this).balance;
+        rdc.equitableCashout();
+        Assert.equal(_expected_rdc_bal, rdc.balanceOf(address(this)), "entire RDC balance of testing contract should have been cashed out");
+        Assert.isAtLeast(address(this).balance, _this_eth_bal + 1, "the testing contract should have cashed out at least 1 wei worth of ETH");
     }
 
     function testMoveTimeForward_1of10() public {

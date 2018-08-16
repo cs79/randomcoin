@@ -382,9 +382,8 @@ contract RDC is MintableToken, BurnableToken {
         uint256 _payout = _RDCToCashOut.mul(availablePayout).div(totalSupply);
         // set the lock mutex before transfer
         txLockMutex = true;
-        // cash out the entire RDC balance of the sender to this contract
-        balances[_add] = balances[_add].sub(_RDCToCashOut);
-        balances[address(this)] = balances[address(this)].add(_RDCToCashOut);
+        // burn the RDC balance in exchange for ETH
+        burn(_RDCToCashOut);
         _add.transfer(_payout);
         // release the lock mutex after transfer
         txLockMutex = false;

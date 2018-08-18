@@ -1,10 +1,10 @@
 pragma solidity ^0.4.23;
 
-// attempt at a fully unified token with a bunch of extras
-
+// Import zeppelin libraries from EthPM / OpenZeppelin
 import "../installed_contracts/zeppelin/contracts/token/MintableToken.sol";
 import "../installed_contracts/zeppelin/contracts/token/BurnableToken.sol";
 
+/** @title randomcoin token (RDC) */
 contract RDC is MintableToken, BurnableToken {
 
     using SafeMath for uint256;
@@ -83,6 +83,11 @@ contract RDC is MintableToken, BurnableToken {
         _;
     }
 
+    modifier txMutexGuarded() {
+        require(!txLockMutex, "txLockMutex must be unlocked");
+        _;
+    }
+
     // mechanism to allow update from funding to active
     modifier canChangeStateToActive() {
         _;
@@ -120,57 +125,85 @@ contract RDC is MintableToken, BurnableToken {
     // FUNCTIONS
     //----------
 
-    // generate a random exchange rate for RDC <--> ETH
+    /** @dev Generate a random exchange rate for RDC <--> ETH
+        @return _rescaled; the random rate rescaled to fall within a particular range
+     */
     function randomRate()
     public //private - made public for testing only
     view
-    returns(uint)
+    returns(uint256)
     {
-        // insecure placeholder; use something like RANDAO for a "real" implementation:
-        // changing block.timestamp to block.number so that Solidity tests can run; this is super insecure
-        // Solidity tests in truffle can run sub-second so block timestamps are the same as each other for subsequent blocks
+        /*  
+        THIS IS AN INSECURE PLACEHOLDER
+        For a Production implementation, this should be replaced with something like RANDAO:
+        https://github.com/randao/randao
+
+        This implementation was based on an example from the following link:
+        https://medium.com/@promentol/lottery-smart-contract-can-we-generate-random-numbers-in-solidity-4f586a152b27
+        (modified to accommodate Truffle's testing setup - no subsecond block times are provided, hence the use of block.number)
+         */
         uint8 _rand = uint8(uint256(keccak256(abi.encodePacked(block.number, block.difficulty))) % 251);
-        // rescale to mean 100 (or whatever) -- 0 and 250 hardcoded here based on how _rand is calculated
-        uint _rescaled = rescaleRate(0, 250, expectedRate, halfWidth, _rand);
+        // rescale to mean of expectedRate -- 0 and 250 hardcoded here based on how _rand is calculated
+        uint256 _rescaled = rescaleRate(0, 250, expectedRate, halfWidth, _rand);
         return _rescaled;
     }
 
-    // rescale rate to fit within a new range (expectedRate +/- halfWidth)
+    /** @dev Rescale a randomly-generated exchange rate to a new value range (expectedRate +/- halfWidth)
+        @param _min Minimum value of the original range
+        @param _max Maximum value of the original range
+        @param _ev  Expected value (mean) of the new range
+        @param _buf Buffer to add and subtract from _ev to generate the new range
+        @param _x   The value to rescale to the new range
+        @return _rescaled_x The rescaled value of _x
+     */
     function rescaleRate(uint _min, uint _max, uint _ev, uint _buf, uint _x)
     private
     view
-    returns(uint)
+    returns(uint256)
     {
-        // rescale _min, _max to _ev-_width, _ev+_width and then return the f(_x) value using:
-        // https://stackoverflow.com/questions/5294955/how-to-scale-down-a-range-of-numbers-with-a-known-min-and-max-value
+        uint256 _rescaled_x;
         uint _a = _ev.sub(_buf);
         uint _b = _ev.add(_buf);
-        require(_a < _b, "_buf has under- or overflowed");  // redundant now with SafeMath I think ?
-        //return ((((_b - _a) * (_x - _min)) / (_max - _min)) + _a);
-        return ((((_b.sub(_a)).mul((_x.sub(_min)))).div((_max.sub(_min)))).add(_a));
+        /*
+        Rescale _min, _max to _ev +/- _buf and calculate _x using the following formula:
+        _x = ((((_b - _a) * (_x - _min)) / (_max - _min)) + _a)
+        
+        Source for this formula can be found at the following link:
+        https://stackoverflow.com/questions/5294955/how-to-scale-down-a-range-of-numbers-with-a-known-min-and-max-value
+         */
+        _rescaled_x = ((((_b.sub(_a)).mul((_x.sub(_min)))).div((_max.sub(_min)))).add(_a));
+        return _rescaled_x;
     }
 
-    // keep track of the running average of random rates
-    function updateAverageRate(uint _last_rate)
+    /**@dev Keep track of the running average of random rates generated for transactions
+       @param _last_rate The last-generated random rate
+       @return _newAR The new value of averageRate
+     */
+    function updateAverageRate(uint256 _last_rate)
     private
-    returns(uint)
+    returns(uint256)
     {
         lastAvgRate = averageRate;
-        uint _newAR;
+        uint256 _newAR;
         if (txCount == 0) {
             _newAR = _last_rate;
         }
         else {
-            // averageRate = ((lastAvgRate * txCount) + [new random rate]) / txCount + 1
+            /*
+            Formula to update the average rate, based on txCount and lastAvgRate:
+            averageRate = ((lastAvgRate * txCount) + _last_rate) / (txCount + 1)
+             */
             _newAR = (lastAvgRate.mul(txCount).add(_last_rate)).div(txCount.add(1));
         }
         averageRate = _newAR;
-        // then increment txCount
-        txCount = txCount.add(1);
+        txCount = txCount.add(1);  // keep track of txCount for next call to this function
         return _newAR;
     }
 
-    // update the storage array of latest rates; should be called by both pegIn() and pegOut()
+    /** @dev Update the storage array latestRates on pegIn() or pegOut()
+        @param _rate The rate to add to latestRates
+        @return _indexed_rate The rate which was newly stored in latestRates
+     */
     function updateRateStorage(uint256 _rate)
     private
     returns(uint256)
@@ -198,10 +231,15 @@ contract RDC is MintableToken, BurnableToken {
             // reassign latestRates to the updated temp array
             latestRates = _temp_rates;
         }
-        return latestRates[_index_used];
+        uint256 _indexed_rate = latestRates[_index_used];
+        return _indexed_rate;
     }
 
-    // peg in from ETH to RDC
+    /** @dev Peg in from ETH to RDC
+        @dev This function, along with pegOut(), is the backbone of the contract
+        @dev The msg.value sent to this function is an implicit parameter: the amount of ETH to exchange for RDC at a random rate
+        @return _rdc_amt The amount of RDC received in exchange for the ETH sent in msg.value
+     */
     function pegIn()
     public
     payable
@@ -221,32 +259,34 @@ contract RDC is MintableToken, BurnableToken {
         // update the values of averageRate and the latestRates storage array
         updateAverageRate(_rndrate);
         updateRateStorage(_rndrate);
-        // emit the PeggedIn event
         emit PeggedIn(_add, _rdc_amt);
         // return the amount received for peg-in
         return _rdc_amt;
     }
 
-    // peg out from RDC to ETH
-    function pegOut(uint _amt)
+    /** @dev Peg out from RDC to ETH
+        @dev This function, along with pegIn(), is the backbone of the contract
+        @param _amt The amount of RDC to exchange back into ETH at a random rate
+        @return _amt The amount of RDC exchanged [IS THIS WHAT IT SHOULD RETURN ???]
+    */
+    function pegOut(uint256 _amt)
     public
     payable
     stateIsActive()
-    returns(uint)
+    txMutexGuarded()
+    returns(uint256)
     {
-        // check the mutex to prevent reentrancy on payable transaction
-        require(!txLockMutex, "txLockMutex must be unlocked");
         // check that account has sufficient balance
         address _add = msg.sender;
         require(balanceOf(_add) >= _amt, "Insufficient balance to peg out");
-        // calculate amount of eth to send (DOES THIS WORK WITHOUT FLOATS ??? MIGHT NEED TO RECONFIGURE MATH FORMULA HERE)
+        // calculate amount of eth to send
         uint _rndrate = randomRate();
         uint _eth_amt = _amt.div(_rndrate);
         // if contract would be drained by peg out, allow equitable withdrawal of whatever is left
-        if (_eth_amt > address(this).balance) {
+        if (_eth_amt >= address(this).balance) {
             equitableDestruct();
         }
-        // otherwise, send the toSend amount to _add (after switching the mutex)
+        // otherwise, send _eth_amt to _add (after switching the mutex)
         txLockMutex = true;
         // burn the pegged-out RDC amount, then send ETH in exchange
         burn(_amt);
@@ -261,92 +301,96 @@ contract RDC is MintableToken, BurnableToken {
         return _amt;
     }
 
-    // this is something of a potential reputational risk
-    // a malicious owner could abuse this; maybe put a timer on its use
-    // (or don't use it at all)
+    /** @dev Change the required minimumPegInBaseAmount if you are the Owner
+        @dev The new value must be within 10% of the prior value
+        @param _new_base The desired new value of minimumPegInBaseAmount
+        @return _new_base The new value of minimumPegInBaseAmount after updating successfully [IS THIS WHAT THIS SHOULD RETURN ???]
+     */
     function changePegInBase(uint256 _new_base)
     public
     onlyOwner()
     returns(uint256)
     {
-        // 10 percent window is sort of arbitrary currently
-        // also nothing really prevents you from changing this rapidly and repeatedly atm...
-        // maybe add in a timer for this as well ?
+        /*
+        Additional notes on this function:
+        - The 10% window is essentially arbitrary
+        - Nothing currently prevents repeated function calls to change this rapidly
+        - Potential abuse of this function is only mitigated by reputational risk to the Owner, if publicly known
+        - This may not be worth including at all in a Production implementation
+         */
         uint256 _lower_bound = minimumPegInBaseAmount.mul(90).div(100);
         uint256 _upper_bound = minimumPegInBaseAmount.mul(110).div(100);
         require(_new_base >= _lower_bound, "Cannot lower minimumPegInBaseAmount that far");
         require(_new_base <= _upper_bound, "Cannot raise minimumPegInBaseAmount that far");
         
-        // change the value of minimumPegInBaseAmount
         minimumPegInBaseAmount = _new_base;
-
-        // emit the relevant event
         emit ChangedPegInBase(_new_base);
-
-        // return the new value of minimumPegInBaseAmount
         return _new_base;
     }
 
-    // same caveats re: abuse apply here as to changePegInBase
-    // use this with caution; maybe don't implement at all
+    /** @dev Change the required blockWaitTime if you are the Owner
+        @dev The new value must be within 10% of the prior value
+        @param _new_wt The desired new value of blockWaitTime
+        @return _new_wt The new value of blockWaitTime after updating successfully [IS THIS WHAT IT SHOULD BE ???]
+    */
     function changeBlockWaitTime(uint256 _new_wt)
     public
     onlyOwner()
     returns(uint256)
     {
+        // N.B. the same caveats noted in changePegInBase re: function abuse by a malicious Owner also apply here
+        
         uint256 _lower_bound = blockWaitTime.mul(90).div(100);
         uint256 _upper_bound = blockWaitTime.mul(110).div(100);
         require(_new_wt >= _lower_bound, "Cannot lower blockWaitTime that far");
         require(_new_wt <= _upper_bound, "Cannot raise blockWaitTime that far");
 
-        // change the value of blockWaitTime
         blockWaitTime = _new_wt;
-
-        // emit the relevant event
         emit ChangedBlockWaitTime(_new_wt);
-
-        // return the new value of blockWaitTime
         return _new_wt;
     }
 
-    // automatic "fair self-destruct" if peg breaks
+    /** @dev Automatic "fair self-destruct" if the peg breaks
+        @dev This is an automatic internal circuit breaker in case the funds available to support the main contract functionality runs out
+        @return _success Boolean flag to signal successful start of liquidation
+     */
     function equitableDestruct()
     private
     notLiquidating()
-    returns(bool)
+    returns(bool _success)
     {
-        // set state to Liquidating
+        // This is the first of two pass-throughs to startLiquidation
         startLiquidation();
-        // probably need some sort of "startCountdown()" function to get called here which allows for withdrawal within a particular window
-        // (window also should then be a state variable -- maybe this can be changed by owner, but ONLY within certain [reasonable] limits)
-        // emit relevant events
         emit TriggeredEquitableDestruct();
-        // return true for testing
         return true;
     }
 
-    // owner-forced "fair self-destruct"
+    /** @dev Owner-forced "fair self-destruct"
+        @dev This is a manual circuit breaker which only the contract Owner can activate
+        @return _success Boolean flag to signal successful start of liquidation
+     */
     function equitableLiquidation()
     public
     notLiquidating()
     onlyOwner()
-    returns(bool)
+    returns(bool _success)
     {
-        // set state to Liquidating
+        // This is the second of two pass-throughs to startLiquidation
         startLiquidation();
-        // emit relevant events
         emit TriggeredEquitableLiquidation(msg.sender);
-        // return true for testing
         return true;
     }
 
-    // instead of just manually changing the state in equitableDestruct / equitableLiquidation, use a smarter method here:
+    /** @dev Shared method to flip the State-based circuit breaker if pegOut() breaks the peg / owner stops the contract
+        @dev Starts a block timer from the current block of [blockWaitTime] blocks
+        @dev Additionally calculates the availablePayout for liquidation, and pauses minting of new RDC
+        @return _success Boolean flag to signal successful start of liquidation
+     */
     function startLiquidation()
     private
-    notLiquidating()  // possibly redundant but maybe keep to be safe
-    returns(bool)
+    notLiquidating()
+    returns(bool _success)
     {
-        // any modifiers needed here ?
         // set liquidation block height to start "countdown" before owner can reset state
         liquidationBlockNumber = block.number;
 
@@ -358,23 +402,30 @@ contract RDC is MintableToken, BurnableToken {
 
         state = State.Liquidating;
         emit StateChangeToLiquidating();
-
-        // how can we start a timer and then "ensure" that the contract gets reset to funding state afterwards?
-        // this may not be directly possible, so can we make a modifier for ALL other functions that resets the state if eligible to do so ?
-        
-        // return true for testing
         return true;
     }
 
-    // "claim fair payout" after the peg has broken
+    /** @dev Claim an address' "fair payout" during a liquidation event (proportional to the sending account's RDC holdings)
+        @return _payout The amount of ETH cashed out during liquidation
+     */
     function equitableCashout()
     public
     payable
     stateIsLiquidating()
+    txMutexGuarded()
     returns(uint)
     {
-        // check the mutex for payable function
-        require(!txLockMutex, "txLockMutex must be unlocked");
+        /*
+        From a mechanism design standpoint, this functions nicely:
+        
+        There is a potential "last-mover advantage" to cashing out during a liquidation
+        (if one is the "last RDC holder" and everyone else has cashed out, 
+        they could hold their RDC until reset and try to quickly force another liquidation event, 
+        which could make their RDC worth proportionately more ETH during the cash out)
+        
+        Because of this last-mover advantage, there is a natural incentive to keep holding RDC even during a liquidation
+        This helps the sustainability of the contract and hence the utility of the RDC token
+        */
         address _add = msg.sender;
         uint256 _RDCToCashOut = balanceOf(_add);
         require(_RDCToCashOut > 0, "Nothing to cash out");
@@ -387,6 +438,7 @@ contract RDC is MintableToken, BurnableToken {
         _add.transfer(_payout);
         // release the lock mutex after transfer
         txLockMutex = false;
+        
         // may need to handle the case where the last person to withdraw cannot do so because fees have drained what would have been proportional shares initially
         
         // emit the relevant event
@@ -395,20 +447,20 @@ contract RDC is MintableToken, BurnableToken {
         return _payout;
     }
 
-    // IDEA: owner can reset state, but ONLY after some window of time has passed allowing people enough time to withdraw (e.g. 2 weeks or something)
-    // TODO: VALIDATE THAT THESE THINGS STILL MAKE SENSE TO RESET GIVEN THAT THIS IS A PERPETUAL RDC CONTRACT NOW
+    /** @dev Reset the contract State to Funding if you are the Owner
+        @dev This function can only be called if blockWaitTime has elapsed since liquidation started
+        @dev Metadata for recalculating availablePayout on the next round of "liveness" is also reset
+        @return _success Boolean flag to signal successful reset of contract state
+     */
     function resetState()
     public
     onlyOwner()
     blockWaitTimeHasElapsed()  //disabling for testing as there is no good way to advance block time in Solidity tests :\
-    returns(bool)
+    returns(bool _success)
     {
         // ALL relevant variables need to be handled here - check constructor / all state vars
-        // worth resetting availablePayout to 0 or something here, to keep resetting "cleaner" ? Logically unnecessary I think
-        haircut = 0; // I think this should be reset here
-        averageRate = expectedRate;  // maybe ? or shoud we track this over longer horizons?
-        lastAvgRate = 0;
-        txCount = 0;
+        availablePayout = 0;
+        haircut = 0;
         state = State.Funding;
         txLockMutex = false;  // hopefully redundant
         
@@ -423,7 +475,7 @@ contract RDC is MintableToken, BurnableToken {
         return true;
     }
 
-    // fallback function
+    /// fallback function
     function () external payable {}
 
 }

@@ -18,7 +18,7 @@ contract RDC is MintableToken, BurnableToken {
     uint256 private lastAvgRate;
     uint256 private txCount;  // use this + last rate to adjust averageRage
     uint256 public expectedRate;
-    uint256 private halfWidth;
+    uint256 public halfWidth;  // made public for testing; I guess this is fine to leave as such
     uint256 public liquidationBlockNumber;
     uint256 public blockWaitTime;
     uint256 public minimumPegInBaseAmount; // liquidation haircut
@@ -28,14 +28,14 @@ contract RDC is MintableToken, BurnableToken {
 
     // for tracking recent transactions in a frontend UI / during testing
     uint256[16] public latestRates;
-    uint8 private maxRateIndex;
+    uint8 public maxRateIndex;  // set to public for testing
     uint8 private currentRateIndex;
-    bool private rateArrayFull;
+    bool public rateArrayFull;  // set to public for testing
 
     // state management
     enum State { Funding, Active, Liquidating }
     State public state;
-    bool private txLockMutex; // possibly redundant with transfer() calls
+    bool public txLockMutex; // possibly redundant with transfer() calls; made public for testing
 
 
     // EVENTS
@@ -475,7 +475,7 @@ contract RDC is MintableToken, BurnableToken {
         return true;
     }
 
-    /// fallback function
+    /** @dev fallback function */
     function () external payable {}
 
 }

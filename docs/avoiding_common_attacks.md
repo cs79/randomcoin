@@ -1,6 +1,8 @@
-Explain what measures I took to make sure that contracts are not susceptible to common attacks
-See Module 9 Lesson 3 for attacks that contracts should be resistant to
-(link to "safety checklist": https://www.kingoftheether.com/contract-safety-checklist.html)
+# Avoiding Common Attacks
+
+This document describes what measures were taken in the design of randomcoin to mitigate against common attacks.  The "safety checklist" at the following link was used as a basis for outlining attack vectors and mitigants:
+
+https://www.kingoftheether.com/contract-safety-checklist.html
 
 ## Logic Bugs
 
@@ -43,9 +45,8 @@ Mitigations for problems arising from exposed functions include:
 
 Mitigations for exposed secrets include:
 * Contracts do not rely on secret information
-* Given random exchange rate mechanism, public visibility of balances has limited game-theoretic impact (mostly impacts probabilities that someone could drain the contract / trigger equitable liquidation, but the latter gives assurance to holders that they will get something "fair" back if the exchange rate mechanism fails) -- NOTE THAT THE LAST-MOVER-ADVANTAGE WILL INCENTIVIZE THE LARGEST HOLDERS TO KEEP THEIR FUNDS IN RDC EVEN IF THE CONTRACT MOVES TO A LIQUIDATION STATE
-
-*** NOTE TO SELF: think about how someone could try to game the system by viewing balances, if they were a relative "whale" -- are there attack vectors whereby they attempt to drain as much ETH from the contract as possible while not triggering equitableLiquidation via a bunch of smaller transactions after a bulk peg-in ?
+* Given the random exchange rate mechanism, public visibility of balances has limited game-theoretic impact (mostly impacts probabilities that someone could drain the contract / trigger equitable liquidation, but the latter gives assurance to holders that they will get something "fair" back if the exchange rate mechanism fails)
+    * N.B. that during a liquidation event, there is also a last-mover advantage which should incentivize the largest holders to keep funds in RDC (the last-mover advantage comes from an inherent advantage to holding RDC in a newly-reset funding state where it is easier to attempt to force another liquidation event which could potentially result in a more favorable ETH/RDC rate)
 
 ## Denial of Service / Dust Spam
 
@@ -55,11 +56,18 @@ Mitigations for dust spam include:
 
 ## Miner Vulnerabilities
 
+In the development version of the code, there is a known major miner vulnerability in the randomRate() function, which uses a hash of the block number and difficulty to determine the random rate.  Block number (extremely insecure) was used simply to make testing repeated calls possible, as block timestamp (also insecure) was not viable due to lack of sub-second block timestamping in ganache-cli.
+
+Production mitigations for this known vulnerability include:
+* Using a deployed instance of RANDAO for random number generation instead of the current randomRate() function: https://github.com/randao/randao
+* (Alternatively) using an Oraclize service: http://docs.oraclize.it/#data-sources-random
+
 ## Malicious Creator
 
-* Currently, the "worst" that the Owner can do is force an equitable liquidation, which does not enable them to "steal" any more ETH than something proportional to what they put in
+Owner functions are currently limited to a single function (equitableLiquidation).  This function is somewhat difficult for a malicious Owner to abuse, as it puts the contract into a state where any holders of RDC may burn their stake of the tokens for a proportional amount of the ETH held by the contract (both RDC and contract's own ETH levels are fixed at the time of liquidation).  The Owner could attempt to abuse this function if they themselves pegged in to RDC at a relatively unfavorable rate and wanted to attempt to socialize their losses by triggering a liquidation event shortly after others had pegged in to the contract but before much ETH had been pegged out.
 
-*** NOTE TO SELF: THINK ABOUT HOW FORCE SENDING ETH COULD POTENTIALLY SKEW INCENTIVES TO FORCE THE LIQUIDATION
+Production mitigations for this problem include:
+* Removing the equitableLiquidation() function entirely (the same functionality in a circuit-breaker situation is automated in the equitableDestruct() function)
 
 ## Off-chain Safety
 
@@ -68,20 +76,31 @@ Mitigations for dust spam include:
 
 ## Cross-chain Replay Attacks
 
-* TODO: Create this contract from a hard-fork-only address (how ?)
+Production mitigations for this problem include:
+* Creating the production instance of the randomcoin contract from a hard-fork-only address
+* Warning users about the potential for making accidental ETC transactions
 
 ## Tx.Origin Problem
 
+Mitigations for the tx.origin problem include:
 * Contracts do not use tx.origin
 
 ## Solidity Function Signatures and Fallback Data Collisions
 
+Mitigations for the fallback signature collision problem include:
+* Using an empty fallback function for the RDC contract
+
 ## Incorrect Use of Cryptography
 
-* Contracts do not use cryptography
+The only use of "cryptography" in the contract is in the use of the keccak256() function in the placeholder randomRate() function, which should be replaced in a Production implementation (see notes to **Miner Vulnerabilities** section above).
 
 ## Gas Limits
 
+Mitigations for functions running into gas limits include:
+* Looping over a fixed-size array in the single function that uses loops
+* Limiting the format of user-provided data to uint256 which is not subsequently stored
+
 ## Stack Call Depth Exhaustion
 
-* Newer version of Solidity used which is not susceptible to this attack
+Mitigations for the stack call depth exhaustion problem include:
+* Using a newer version of Solidity which is not susceptible to this attack

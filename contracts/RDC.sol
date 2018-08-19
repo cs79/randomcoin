@@ -17,6 +17,7 @@ contract RDC is MintableToken, BurnableToken {
     uint256 public averageRate;
     uint256 private lastAvgRate;
     uint256 private txCount;  // use this + last rate to adjust averageRage
+    uint256 private txCountSinceLastReset;
     uint256 public expectedRate;
     uint256 public halfWidth;  // made public for testing; I guess this is fine to leave as such
     uint256 public liquidationBlockNumber;
@@ -92,11 +93,26 @@ contract RDC is MintableToken, BurnableToken {
     modifier canChangeStateToActive() {
         _;
         if (state == State.Funding) {
-            if (txCount >= minTxToActivate || address(this).balance >= minBalanceToActivate) {
+            if (txCountSinceLastReset >= minTxToActivate || address(this).balance >= minBalanceToActivate) {
                 state = State.Active;
                 emit StateChangeToActive();
             }
         }
+    }
+
+    // mechanism to allow update from liquidating to funding
+    modifier canChangeStateToFunding() {
+        if (state == State.Liquidating && block.number.sub(liquidationBlockNumber) >= blockWaitTime) {
+            availablePayout = 0;
+            haircut = 0;
+            txCountSinceLastReset = 0;
+            state = State.Funding;
+            txLockMutex = false;
+            mintingFinished = false;
+            emit FullContractReset(msg.sender);
+            emit StateChangeToFunding();
+        }
+        _;
     }
 
 
@@ -197,6 +213,7 @@ contract RDC is MintableToken, BurnableToken {
         }
         averageRate = _newAR;
         txCount = txCount.add(1);  // keep track of txCount for next call to this function
+        txCountSinceLastReset = txCountSinceLastReset.add(1);
         return _newAR;
     }
 
@@ -237,14 +254,17 @@ contract RDC is MintableToken, BurnableToken {
 
     /** @dev Peg in from ETH to RDC
         @dev This function, along with pegOut(), is the backbone of the contract
+        @dev This function can change State from Funding to Active (if sufficient value or # of transactions are pegged in)
+        @dev This function can also change State from Liquidating to Funding (if sufficient time has passed since liquidation)
         @dev The msg.value sent to this function is an implicit parameter: the amount of ETH to exchange for RDC at a random rate
         @return _rdc_amt The amount of RDC received in exchange for the ETH sent in msg.value
      */
     function pegIn()
     public
     payable
-    notLiquidating()
+    //notLiquidating()
     canAffordPegIn()
+    canChangeStateToFunding()
     canChangeStateToActive()
     returns(uint256)
     {
@@ -299,55 +319,6 @@ contract RDC is MintableToken, BurnableToken {
         emit PeggedOut(_add, _amt);
         // return the amount pegged out
         return _amt;
-    }
-
-    /** @dev Change the required minimumPegInBaseAmount if you are the Owner
-        @dev The new value must be within 10% of the prior value
-        @param _new_base The desired new value of minimumPegInBaseAmount
-        @return _new_base The new value of minimumPegInBaseAmount after updating successfully [IS THIS WHAT THIS SHOULD RETURN ???]
-     */
-    function changePegInBase(uint256 _new_base)
-    public
-    onlyOwner()
-    returns(uint256)
-    {
-        /*
-        Additional notes on this function:
-        - The 10% window is essentially arbitrary
-        - Nothing currently prevents repeated function calls to change this rapidly
-        - Potential abuse of this function is only mitigated by reputational risk to the Owner, if publicly known
-        - This may not be worth including at all in a Production implementation
-         */
-        uint256 _lower_bound = minimumPegInBaseAmount.mul(90).div(100);
-        uint256 _upper_bound = minimumPegInBaseAmount.mul(110).div(100);
-        require(_new_base >= _lower_bound, "Cannot lower minimumPegInBaseAmount that far");
-        require(_new_base <= _upper_bound, "Cannot raise minimumPegInBaseAmount that far");
-        
-        minimumPegInBaseAmount = _new_base;
-        emit ChangedPegInBase(_new_base);
-        return _new_base;
-    }
-
-    /** @dev Change the required blockWaitTime if you are the Owner
-        @dev The new value must be within 10% of the prior value
-        @param _new_wt The desired new value of blockWaitTime
-        @return _new_wt The new value of blockWaitTime after updating successfully [IS THIS WHAT IT SHOULD BE ???]
-    */
-    function changeBlockWaitTime(uint256 _new_wt)
-    public
-    onlyOwner()
-    returns(uint256)
-    {
-        // N.B. the same caveats noted in changePegInBase re: function abuse by a malicious Owner also apply here
-        
-        uint256 _lower_bound = blockWaitTime.mul(90).div(100);
-        uint256 _upper_bound = blockWaitTime.mul(110).div(100);
-        require(_new_wt >= _lower_bound, "Cannot lower blockWaitTime that far");
-        require(_new_wt <= _upper_bound, "Cannot raise blockWaitTime that far");
-
-        blockWaitTime = _new_wt;
-        emit ChangedBlockWaitTime(_new_wt);
-        return _new_wt;
     }
 
     /** @dev Automatic "fair self-destruct" if the peg breaks
@@ -445,34 +416,6 @@ contract RDC is MintableToken, BurnableToken {
         emit MadeEquitableCashout(_add, _payout);
         // return the amount paid out
         return _payout;
-    }
-
-    /** @dev Reset the contract State to Funding if you are the Owner
-        @dev This function can only be called if blockWaitTime has elapsed since liquidation started
-        @dev Metadata for recalculating availablePayout on the next round of "liveness" is also reset
-        @return _success Boolean flag to signal successful reset of contract state
-     */
-    function resetState()
-    public
-    onlyOwner()
-    blockWaitTimeHasElapsed()  //disabling for testing as there is no good way to advance block time in Solidity tests :\
-    returns(bool _success)
-    {
-        // ALL relevant variables need to be handled here - check constructor / all state vars
-        availablePayout = 0;
-        haircut = 0;
-        state = State.Funding;
-        txLockMutex = false;  // hopefully redundant
-        
-        // allow minting again
-        mintingFinished = false;
-        
-        // emit relevant event(s)
-        emit FullContractReset(msg.sender);
-        emit StateChangeToFunding();
-
-        // return true for testing
-        return true;
     }
 
     /** @dev fallback function */

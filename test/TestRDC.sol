@@ -166,24 +166,6 @@ contract TestRDC {
         Assert.equal(rdc.balanceOf(this), _this_rdc_bal - (_this_rdc_bal / 10), "this contract should have lost 1/10th of its RDCTokens");
     }
 
-    /** @dev Test that the Owner can change the minimumPegInBaseAmount within the allowed range
-        @dev This test covers the changePegInBase() function
-     */
-    function testChangePegInBase() public {
-        uint256 _new_base = 109 szabo;  // should pass
-        rdc.changePegInBase(_new_base);
-        Assert.equal(_new_base, rdc.minimumPegInBaseAmount(), "Peg in base should be 109 szabo");
-    }
-
-    /** @dev Test that the Owner can change the blockWaitTime within the allowed range
-        @dev This test covers the changeBlockWaitTime() function
-     */
-    function testChangeBlockWaitTime() public {
-        uint256 _new_bwt = 9;  // basically at the limit... hopefully works :\
-        rdc.changeBlockWaitTime(_new_bwt);
-        Assert.equal(_new_bwt, rdc.blockWaitTime(), "blockWaitTime should be equal to 5760 * 14 + 1000");
-    }
-
     /** @dev Test that the Owner can force an equitable liquidation event
         @dev This is essentially a test of startLiquidation(), which is called by equitableLiquidation() and equitableDestruct() (under different circumstances)
         @dev This test covers the equitableLiquidation() function directly, and the startLiquidation() and equitableDestruct() functions indirectly
@@ -252,12 +234,13 @@ contract TestRDC {
         Assert.equal(moveTimeForward, true, "Wheeee");
     }
 
-    /** @dev This tests that Owner can reset the contract state after a liquidation has occured and enough time has passed to allow holders to withdraw their "fair payout"
-        @dev This test covers the resetState() functionality
+    /** @dev This tests the contract state can be reset by a new peg-in transaction after the cash-out period has elapsed
+        @dev This test covers the canChangeStateToFunding() modifier
      */
-    function testResetState() public {
-        bool result = rdc.resetState();
-        Assert.equal(result, true, "State should have been reset (as long as blocks moved forward)");
+    function testResetViaPegIn() public {
+        Assert.equal(rdc.mintingFinished(), true, "Minting should be paused in Liquidation state");
+        rdc.pegIn.value(15 finney).gas(300000)();
+        Assert.equal(rdc.mintingFinished(), false, "Minting should be allowed again after contract reset");
     }
 
     /** @dev fallback function */

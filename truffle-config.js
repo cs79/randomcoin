@@ -15,4 +15,25 @@
 module.exports = {
   // See <http://truffleframework.com/docs/advanced/configuration>
   // to customize your Truffle configuration!
+  networks: {
+    development: {
+      host: "localhost",
+      port: 8545,
+      network_id: "*",
+      gasPrice: 1,
+      gas: 8000000
+    }
+  },
+  rpc: {
+    host: "localhost",
+    gasPrice: 1,
+    gas: 8000000,
+    port: 8545
+  },
+  solc: {
+    optimizer: {
+      enabled: true,
+      runs: 200
+    }
+  }
 };

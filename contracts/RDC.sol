@@ -262,7 +262,6 @@ contract RDC is MintableToken, BurnableToken {
     function pegIn()
     public
     payable
-    //notLiquidating()
     canAffordPegIn()
     canChangeStateToFunding()
     canChangeStateToActive()
@@ -303,7 +302,7 @@ contract RDC is MintableToken, BurnableToken {
         uint _rndrate = randomRate();
         uint _eth_amt = _amt.div(_rndrate);
         // if contract would be drained by peg out, allow equitable withdrawal of whatever is left
-        if (_eth_amt >= address(this).balance) {
+        if (_eth_amt >= address(this).balance - haircut) {  // capture the haircut here so fees can be paid during cash out
             equitableDestruct();
         }
         // otherwise, send _eth_amt to _add (after switching the mutex)

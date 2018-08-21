@@ -10,7 +10,7 @@ Currently `equitableLiquidation` can be manually triggered by the owner, while `
 
 The `equitableLiquidation` function could be removed in a Production implementation, as the automatic circuit breaker should be sufficient to manage the lifecycle of the contract and removing the manual circuit breaker could preclude a malicious Owner from using it to attempt an attack on the contract.
 
-## State Machine / Autodeprecation
+## State Machine / Autodeprecation / Speed Bump
 
 The life cycle of the contract is managed as a state machine, with three states (`Funding`, `Active`, `Liquidating`) that can be cycled through.  There is functionality built into the contract to manage automatic state transitions when core functions are called under certain circumstances:
 
@@ -19,7 +19,7 @@ The life cycle of the contract is managed as a state machine, with three states 
 * A call to `pegOut` which would drain the contract of its balance (thus breaking the peg) will trip the automatic circuit breaker (`equitableDestruct`), which will change the state from `Active` to `Liquidating` (`pegOut` can only be called in the `Active` state)
 * A call to `pegIn` when the contract is in the `Liquidating` state can reset the state to `Funding`, **if** the `blockWaitTime` has elapsed (giving RDC holders time to cash out their RDC for an equitable share of the ETH held by the contract if they wish to do so)
 
-The lattermost bullet also illustrates the use of an "autodeprecation" style pattern: the requirement that the contract remain in the `Liquidating` state will automatically deprecate after `blockWaitTime` has elapsed following the event which initially triggered the liquidation.
+The lattermost bullet also illustrates the use of an "autodeprecation" or "speed bump" style pattern: the requirement that the contract remain in the `Liquidating` state will automatically deprecate after `blockWaitTime` has elapsed (i.e. the speed bump) following the event which initially triggered the liquidation.
 
 ## Ownership
 
@@ -33,20 +33,15 @@ The contract can make ETH payments to RDC holders via the `pegOut` and `equitabl
 
 For those functions which make payments upon request (`pegOut`, `equitableCashout`), a mutex is used as a reentrancy guard -- the mutex is checked at the beginning of both functions (via the modifier `txMutexGuarded`), and is set prior to the send of ETH and then released after the send.  This may be redundant as far as preventing reentrancy is concerned as both functions use `transfer` rather than `send` to make payments, but has been retained for extra safety.
 
-## Equitable Liquidation
+## Equitable Liquidation / Haircut
 
+This pattern was designed for the randomcoin contract in particular, but could be used for any token built on top of Ethereum.  The mechanism is meant to serve as an incentive for investors in the token, which is particularly important for randomcoin as its functionality rests on an exchange rate peg -- investors can have an assurance that if an equitable liquidation is triggered, they can claim a share of ETH from the contract proportional to their share of RDC holdings via the `equitableCashout` function.  While they may experience some dilution (or gain) in this fashion vs. the actual rates they pegged in at, they can in any case be assured that they will not receive *nothing* in exchange for their investment.
 
+`pegIn` transactions are also haircut (for a small fixed amount) to cover fees on `transfer` calls made during equitable liquidations.  Because RDC are transferable between accounts, the haircut cannot absolutely guarantee that the randomcoin contract will have enough ETH to pay all `equitableCashout` fees, but potential fee drain is ameliorated through a floor on RDC required to cash out to prevent abuse by an attacker splitting up RDC across multiple addresses to try to drain the contract's ability to pay transfer fees.
 
 ## Ideas for Future Implementation
 
-* Mortal (maybe... if anything, this would be IN ADDITION to existing equitableDestruct functions) - this would also kind of work against the idea of "securing against malicious owners / creators"
+Future additions would likely focus on patterns that facilitate some form of upgradability:
 
-Stretch:
-* relay / some form of upgradeability
-
-Other design notes:
-* Explain why I used equitable destruction (incentivize people to peg in since they will always get something "fair" out)
-* explain why I designed the payout calculation the way I did (intra-round fairness, if I designed it right - compare to dilution in startup cap tables as they raise new funding rounds)
-* explain why lotto ("easy" way to collect some extra funding to defend the peg)
-* explain why haircut (start gathering capital for defense of peg; haircut rate is adjustable)
-* anything else that I need to be able to justify to myself / others
+* Data segregation / contract relay: Separate the storage of token balances from other contract functionality, so that the latter can be upgraded via the relay pattern without disrupting RDC balances
+* Rate limiter: some state variables could potentially be changed by an Owner to "upgrade" the contract, but these should be both rate-limited and probably limited in absolute terms.  For example, earlier versions of the contract allowed the owner to manipulate the `minimumPegInBaseAmount` and `blockWaitTime` state variables, but these were removed to avoid potential abuse by a malicious owner.  It is possible that with proper absolute bounds and rate limitations on how quickly the owner could change those parameters that keeping such functionality in the contract could be worthwhile.

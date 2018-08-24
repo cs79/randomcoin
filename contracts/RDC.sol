@@ -1,5 +1,10 @@
 pragma solidity ^0.4.23;
 
+// TODO:
+// FIGURE OUT WHAT HAPPENS IF equitableCashout() IS CALLED BUT THIS CONTRACT CAN'T AFFORD THE TRANSFER
+// FIGURE OUT HOW TO RESET THE txLockMutex IF SOMETHING TERRIBLE HAPPENS
+// PUT A FLOOR ON THE AMOUNT OF RDC AN ACCOUNT MUST HAVE TO USE equitableCashout() TO PREVENT ABUSE BY SPLITTING UP RDC ACROSS ADDRESSES
+
 // Import zeppelin libraries from EthPM / OpenZeppelin
 import "../installed_contracts/zeppelin/contracts/token/MintableToken.sol";
 import "../installed_contracts/zeppelin/contracts/token/BurnableToken.sol";
@@ -16,8 +21,8 @@ contract RDC is MintableToken, BurnableToken {
     uint256 public haircut;  // made public for testing
     uint256 public averageRate;
     uint256 private lastAvgRate;
-    uint256 private txCount;  // use this + last rate to adjust averageRage
-    uint256 private txCountSinceLastReset;
+    uint256 public txCount;  // use this + last rate to adjust averageRage
+    uint256 public txCountSinceLastReset;
     uint256 public expectedRate;
     uint256 public halfWidth;  // made public for testing; I guess this is fine to leave as such
     uint256 public liquidationBlockNumber;
@@ -36,6 +41,7 @@ contract RDC is MintableToken, BurnableToken {
     // state management
     enum State { Funding, Active, Liquidating }
     State public state;
+    bytes2 stateBytes;
     bool public txLockMutex; // possibly redundant with transfer() calls; made public for testing
 
 
@@ -53,6 +59,7 @@ contract RDC is MintableToken, BurnableToken {
     event StateChangeToLiquidating();
     event MadeEquitableCashout(address _add, uint _amt);
     event FullContractReset(address _add);  // maybe; kind of redundant w/ StateChangeToFunding
+    event OwnerUnlockedTxMutex(address _add);
 
 
     // MODIFIERS
@@ -95,6 +102,7 @@ contract RDC is MintableToken, BurnableToken {
         if (state == State.Funding) {
             if (txCountSinceLastReset >= minTxToActivate || address(this).balance >= minBalanceToActivate) {
                 state = State.Active;
+                stateBytes = bytes2(keccak256("Active"));
                 emit StateChangeToActive();
             }
         }
@@ -107,6 +115,7 @@ contract RDC is MintableToken, BurnableToken {
             haircut = 0;
             txCountSinceLastReset = 0;
             state = State.Funding;
+            stateBytes = bytes2(keccak256("Funding"));
             txLockMutex = false;
             mintingFinished = false;
             emit FullContractReset(msg.sender);
@@ -134,6 +143,7 @@ contract RDC is MintableToken, BurnableToken {
         maxRateIndex = 15;
         rateArrayFull = false;
         state = State.Funding;
+        stateBytes = bytes2(keccak256("Funding"));
         txLockMutex = false;
     }
 
@@ -217,6 +227,8 @@ contract RDC is MintableToken, BurnableToken {
         return _newAR;
     }
 
+    // TODO: FIX THIS FUNCTION - INSERTS A 0 WHEN THE ARRAY FIRST FILLS UP
+
     /** @dev Update the storage array latestRates on pegIn() or pegOut()
         @param _rate The rate to add to latestRates
         @return _indexed_rate The rate which was newly stored in latestRates
@@ -233,7 +245,7 @@ contract RDC is MintableToken, BurnableToken {
             _index_used = currentRateIndex;
             currentRateIndex += 1;
             // guarantees safety for the increment operation - will not overflow as uint8 can store values > 15
-            if (currentRateIndex == maxRateIndex) {
+            if (_index_used == maxRateIndex) {
                 rateArrayFull = true;
             }
         } else {
@@ -371,6 +383,7 @@ contract RDC is MintableToken, BurnableToken {
         mintingFinished = true;
 
         state = State.Liquidating;
+        stateBytes = bytes2(keccak256("Liquidating"));
         emit StateChangeToLiquidating();
         return true;
     }
@@ -383,7 +396,7 @@ contract RDC is MintableToken, BurnableToken {
     payable
     stateIsLiquidating()
     txMutexGuarded()
-    returns(uint)
+    returns(uint256)
     {
         /*
         From a mechanism design standpoint, this functions nicely:
@@ -415,6 +428,49 @@ contract RDC is MintableToken, BurnableToken {
         emit MadeEquitableCashout(_add, _payout);
         // return the amount paid out
         return _payout;
+    }
+
+    /** @dev This is a function to unlock the mutex in an emergency
+        @dev This should basically never need to be used
+        @return _success Boolean flag to signal successful unlocking of mutex
+     */
+    function emergencyUnlockTxMutex()
+    public
+    onlyOwner()
+    returns(bool _success)
+    {
+        txLockMutex = false;
+        emit OwnerUnlockedTxMutex(address(owner));
+        return true;
+    }
+
+    // CONVENIENCE FUNCTIONS FOR WEB INTERFACE
+    //----------------------------------------
+
+    function getLatestRates()
+    public
+    view
+    returns(uint256[16])  // maybe increase the size of this array everywhere
+    {
+        return latestRates;
+    }
+
+    function getStateBytes()
+    public
+    view
+    returns(bytes2)
+    {
+        return stateBytes;
+    }
+
+    // sadly this does not do what I want it to :\
+    // maybe if i have it actually toggle the state of a meaningless variable on the contract ?
+    function nextBlock()
+    public
+    view
+    returns(bool)
+    {
+        return true;
     }
 
     /** @dev fallback function */
